@@ -40,13 +40,18 @@
           <button id="buy-button" type="button">Köp fastighet</button>
           <button id="decline-button" type="button">Avstå</button>
           <button id="build-button" type="button">Bygg</button>
-          <button type="button">Fråga banken</button>
+          <button id="ask-bank-button" type="button">Fråga banken</button>
         </div>
       </section>
 
       <section class="control-panel">
         <h2>Banken</h2>
         <p id="mobile-bank-message">-</p>
+        <div id="bank-chat" class="bank-chat"></div>
+        <form id="bank-chat-form" class="bank-chat-form">
+          <input id="bank-chat-input" maxlength="280" placeholder="Fråga banken..." autocomplete="off">
+          <button type="submit">Skicka</button>
+        </form>
         <ol id="mobile-events" class="event-list"></ol>
         <button id="new-game-button" type="button">Nytt testspel</button>
       </section>

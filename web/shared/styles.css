@@ -498,6 +498,60 @@ textarea {
   display: none;
 }
 
+.bank-chat {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  background: #fffdf8;
+}
+
+.bank-chat:empty {
+  display: none;
+}
+
+.bank-chat-message {
+  display: grid;
+  gap: 2px;
+  max-width: 92%;
+  border: 2px solid #d2c5ad;
+  border-radius: 6px;
+  padding: 8px;
+  background: white;
+}
+
+.bank-chat-message strong {
+  font-size: 0.78rem;
+}
+
+.bank-chat-message p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+
+.bank-chat-message.from-bank {
+  justify-self: start;
+  border-color: #205da8;
+  background: #eef5ff;
+}
+
+.bank-chat-message.from-player {
+  justify-self: end;
+  border-color: #1f7a4c;
+  background: #edf7ef;
+}
+
+.bank-chat-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .phone-shell,
 .admin-shell {
   width: min(100%, 720px);
@@ -737,6 +791,7 @@ textarea {
 @media (max-width: 520px) {
   .action-grid,
   .join-row,
+  .bank-chat-form,
   .token-buttons {
     grid-template-columns: 1fr;
   }

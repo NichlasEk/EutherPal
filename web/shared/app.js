@@ -104,6 +104,8 @@ function renderMobile(state) {
   renderOfferControls(state, local);
   renderAuctionControls(state, local);
   renderBuildControls(state, local);
+  renderBankChat(document.getElementById("bank-chat"), state.bankChat);
+  bindMobileBankChat(state);
   document.getElementById("roll-button").onclick = async () => {
     const updated = await postAction("/api/game/roll", playerBody());
     renderMobile(updated);
@@ -130,6 +132,8 @@ function renderAdmin(state) {
       document.getElementById("admin-ai").textContent = health.ai;
     });
   document.getElementById("admin-room").textContent = state.roomCode;
+  renderBankChat(document.getElementById("admin-bank-chat"), state.bankChat);
+  bindAdminBankChat();
 }
 
 async function renderSettings() {
@@ -206,6 +210,45 @@ function renderEvents(container, events) {
     .reverse()
     .map((event) => `<li>${event}</li>`)
     .join("");
+}
+
+function renderBankChat(container, messages) {
+  if (!container) return;
+  container.innerHTML = (messages || [])
+    .map((message) => `<div class="bank-chat-message ${message.fromBank ? "from-bank" : "from-player"}"><strong>${escapeHtml(message.speaker)}</strong><p>${escapeHtml(message.text)}</p></div>`)
+    .join("");
+  container.scrollTop = container.scrollHeight;
+}
+
+function bindMobileBankChat(state) {
+  const askButton = document.getElementById("ask-bank-button");
+  const form = document.getElementById("bank-chat-form");
+  const input = document.getElementById("bank-chat-input");
+  if (!form || !input) return;
+  if (askButton) askButton.onclick = () => input.focus();
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const message = input.value.trim();
+    if (!message) return;
+    const body = new URLSearchParams({ player: localPlayerName(), message });
+    input.value = "";
+    const updated = await postAction("/api/bank/chat", body.toString());
+    renderMobile(updated);
+  };
+}
+
+function bindAdminBankChat() {
+  const form = document.getElementById("admin-bank-form");
+  const input = document.getElementById("admin-bank-input");
+  if (!form || !input) return;
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const message = input.value.trim();
+    if (!message) return;
+    input.value = "";
+    const updated = await postAction("/api/bank/admin-message", new URLSearchParams({ message }).toString());
+    renderAdmin(updated);
+  };
 }
 
 function cardIcon(icon) {

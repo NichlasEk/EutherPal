@@ -85,6 +85,13 @@ struct DrawnCard {
     icon: String,
 }
 
+#[derive(Clone)]
+struct BankChatMessage {
+    speaker: String,
+    text: String,
+    from_bank: bool,
+}
+
 struct GameState {
     room_code: String,
     phase: Phase,
@@ -103,6 +110,7 @@ struct GameState {
     pending_offer: Option<PendingOffer>,
     auction: Option<AuctionState>,
     drawn_card: Option<DrawnCard>,
+    bank_chat: Vec<BankChatMessage>,
     events: Vec<String>,
     bank_message: String,
 }
@@ -252,6 +260,25 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
             game.finish_auction();
             json(200, &game.to_json())
         }
+        ("POST", "/api/bank/chat") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
+            let message = form_value(&body, "message")
+                .or_else(|| query_value(query, "message"))
+                .unwrap_or_default();
+            let mut game = game.lock().expect("game state lock");
+            game.ask_bank(&player, &message);
+            json(200, &game.to_json())
+        }
+        ("POST", "/api/bank/admin-message") => {
+            let message = form_value(&body, "message")
+                .or_else(|| query_value(query, "message"))
+                .unwrap_or_default();
+            let mut game = game.lock().expect("game state lock");
+            game.admin_bank_message(&message);
+            json(200, &game.to_json())
+        }
         ("GET", "/tv") | ("GET", "/tv/") => html(200, TV_HTML),
         ("GET", "/mobile") | ("GET", "/mobile/") => html(200, MOBILE_HTML),
         ("GET", "/admin") | ("GET", "/admin/") => html(200, ADMIN_HTML),
@@ -333,6 +360,11 @@ impl GameState {
             pending_offer: None,
             auction: None,
             drawn_card: None,
+            bank_chat: vec![BankChatMessage {
+                speaker: "Banken".to_string(),
+                text: "Jag är redo som bank och spelledare. Skriv i mobilen om du vill fråga om regler, köp, hyra eller din position.".to_string(),
+                from_bank: true,
+            }],
             events: vec![format!("{first_name} börjar och väljer pjäs först.")],
             bank_message: format!(
                 "{first_name} börjar och väljer pjäs först. Välj en av de fem klassiska pjäserna."
@@ -886,6 +918,162 @@ impl GameState {
         }
     }
 
+    fn ask_bank(&mut self, player_name: &str, message: &str) {
+        let player_name = clean_player_name(player_name);
+        let message = clean_chat_message(message);
+        if player_name.is_empty() {
+            self.push_bank_message(
+                "Banken",
+                "Skriv ditt namn på mobilen först, så vet jag vem jag pratar med.",
+                true,
+            );
+            return;
+        }
+        if message.is_empty() {
+            self.push_bank_message("Banken", "Skriv en fråga till banken först.", true);
+            return;
+        }
+
+        self.push_bank_message(&player_name, &message, false);
+        let answer = self.mock_bank_answer(&player_name, &message);
+        self.bank_message = format!("Banken till {player_name}: {answer}");
+        self.push_bank_message("Banken", &answer, true);
+    }
+
+    fn admin_bank_message(&mut self, message: &str) {
+        let message = clean_chat_message(message);
+        if message.is_empty() {
+            self.push_bank_message(
+                "Banken",
+                "Admin försökte skicka ett tomt bankmeddelande.",
+                true,
+            );
+            return;
+        }
+        self.bank_message = format!("Banken: {message}");
+        self.push_bank_message("Banken", &message, true);
+        self.push_event(format!("Banken sade: {message}"));
+    }
+
+    fn push_bank_message(&mut self, speaker: &str, text: &str, from_bank: bool) {
+        self.bank_chat.push(BankChatMessage {
+            speaker: speaker.to_string(),
+            text: text.to_string(),
+            from_bank,
+        });
+        if self.bank_chat.len() > 24 {
+            self.bank_chat.remove(0);
+        }
+    }
+
+    fn mock_bank_answer(&self, player_name: &str, message: &str) -> String {
+        let Some(player_index) = self
+            .players
+            .iter()
+            .position(|player| player.name == player_name)
+        else {
+            return "Jag hittar inte din spelare ännu. Välj pjäs först, sedan kan jag hjälpa dig med läget.".to_string();
+        };
+        let player = &self.players[player_index];
+        let space = &self.spaces[player.position];
+        let lower = message.to_lowercase();
+        let owned = self
+            .spaces
+            .iter()
+            .filter(|space| self.owners[space.index] == Some(player_index))
+            .map(|space| space.name.clone())
+            .collect::<Vec<_>>();
+
+        if let Some(offer) = &self.pending_offer {
+            if offer.player_index == player_index {
+                let offer_space = &self.spaces[offer.space_index];
+                return format!(
+                    "Du kan köpa {} för {} kr. Du har {} kr. Om du avstår startar auktion.",
+                    offer_space.name,
+                    offer_space.price.unwrap_or(0),
+                    player.cash
+                );
+            }
+        }
+        if let Some(auction) = &self.auction {
+            return format!(
+                "Auktion pågår om {}. Högsta bud är {} kr{}.",
+                self.spaces[auction.space_index].name,
+                auction.highest_bid,
+                auction
+                    .highest_bidder
+                    .map(|index| format!(" från {}", self.players[index].name))
+                    .unwrap_or_default()
+            );
+        }
+        if lower.contains("tur") || lower.contains("kasta") || lower.contains("slå") {
+            if self.phase == Phase::TokenSelection {
+                return format!(
+                    "Vi är fortfarande i pjäsval. {} ska välja pjäs nu.",
+                    self.players[self.current_selector_index()].name
+                );
+            }
+            if self.players[self.current_player_index].name == player_name {
+                return "Ja, det är din tur. Kasta tärningen när du är redo.".to_string();
+            }
+            return format!(
+                "Inte riktigt än. Det är {}s tur.",
+                self.players[self.current_player_index].name
+            );
+        }
+        if lower.contains("var") || lower.contains("plats") || lower.contains("står") {
+            return format!("Du står på {} och har {} kr.", space.name, player.cash);
+        }
+        if lower.contains("peng") || lower.contains("råd") || lower.contains("cash") {
+            return format!(
+                "Du har {} kr. Du äger {}.",
+                player.cash,
+                list_or_none(&owned)
+            );
+        }
+        if lower.contains("hyra") {
+            let owner_text = self.owners[space.index]
+                .map(|owner| format!(" och ägs av {}", self.players[owner].name))
+                .unwrap_or_else(|| " och är inte ägd av någon".to_string());
+            return format!(
+                "{} har aktuell hyra {} kr{}.",
+                space.name,
+                self.rent_for_space(space.index),
+                owner_text
+            );
+        }
+        if lower.contains("bygg") || lower.contains("hus") || lower.contains("hotell") {
+            let buildable = self.buildable_properties_for(player_index);
+            if buildable.is_empty() {
+                return "Du har inget byggbart just nu. Du behöver äga en hel färggrupp och bygga jämnt.".to_string();
+            }
+            return format!(
+                "Du kan bygga på {} när det är din tur och ingen köpfråga eller auktion pågår.",
+                list_or_none(&buildable)
+            );
+        }
+        if lower.contains("äger") || lower.contains("mina") {
+            return format!("Du äger {}.", list_or_none(&owned));
+        }
+
+        format!(
+            "Jag ser dig på {} med {} kr. Senaste läget: {}",
+            space.name, player.cash, self.bank_message
+        )
+    }
+
+    fn buildable_properties_for(&self, player_index: usize) -> Vec<String> {
+        self.spaces
+            .iter()
+            .filter(|space| {
+                space.kind == "property"
+                    && self.owners[space.index] == Some(player_index)
+                    && self.build_error(player_index, space.index).is_none()
+            })
+            .map(|space| space.name.clone())
+            .collect()
+    }
+
     fn to_json(&self) -> String {
         let current = &self.players[self.current_selector_index()].name;
         let players = self
@@ -944,6 +1132,19 @@ impl GameState {
             .map(|event| format!("\"{}\"", escape_json(event)))
             .collect::<Vec<_>>()
             .join(",");
+        let bank_chat = self
+            .bank_chat
+            .iter()
+            .map(|message| {
+                format!(
+                    "{{\"speaker\":\"{}\",\"text\":\"{}\",\"fromBank\":{}}}",
+                    escape_json(&message.speaker),
+                    escape_json(&message.text),
+                    message.from_bank
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
         let token_choices = TOKEN_CHOICES
             .iter()
             .map(|(id, label)| {
@@ -962,7 +1163,7 @@ impl GameState {
             .join(",");
 
         format!(
-            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}]}}",
+            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}],\"bankChat\":[{}]}}",
             escape_json(&self.room_code),
             self.phase.as_str(),
             escape_json(current),
@@ -976,7 +1177,8 @@ impl GameState {
             players,
             token_choices,
             spaces,
-            events
+            events,
+            bank_chat
         )
     }
 
@@ -1473,6 +1675,23 @@ fn clean_player_name(name: &str) -> String {
         .collect()
 }
 
+fn clean_chat_message(message: &str) -> String {
+    message
+        .trim()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(280)
+        .collect()
+}
+
+fn list_or_none(items: &[String]) -> String {
+    if items.is_empty() {
+        "ingenting ännu".to_string()
+    } else {
+        items.join(", ")
+    }
+}
+
 fn building_label(level: u8) -> &'static str {
     match level {
         0 => "ingen byggnad",
@@ -1563,5 +1782,25 @@ mod tests {
 
         assert_eq!(game.players[0].position, 0);
         assert!(game.bank_message.contains("Majas tur"));
+    }
+
+    #[test]
+    fn bank_chat_answers_with_player_context() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+
+        game.ask_bank("Maja", "Var står jag?");
+
+        assert!(
+            game.bank_chat
+                .iter()
+                .any(|message| message.speaker == "Maja")
+        );
+        assert!(
+            game.bank_chat
+                .iter()
+                .any(|message| message.from_bank && message.text.contains("Gå"))
+        );
+        assert!(game.bank_message.contains("Banken till Maja"));
     }
 }
