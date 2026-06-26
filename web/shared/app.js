@@ -9,11 +9,12 @@
     await renderSettings();
   }
 
-  if (view === "tv" || view === "admin") {
+  if (view === "tv" || view === "admin" || view === "mobile") {
     window.setInterval(async () => {
       const freshState = await fetchState();
       if (view === "tv") renderTv(freshState);
       if (view === "admin") renderAdmin(freshState);
+      if (view === "mobile") renderMobile(freshState);
     }, 1200);
   }
 })();
@@ -60,7 +61,7 @@ function renderTv(state) {
 
   const players = document.getElementById("players");
   players.innerHTML = state.players
-    .map((player) => `<div class="player-row"><strong>${player.name}</strong><span>${player.cash} kr</span><em>${tokenLabel(player.token) || "Väljer pjäs"}${player.jailed ? " · Fängslad" : ""}</em></div>`)
+    .map((player) => `<div class="player-row"><strong>${escapeHtml(player.name)}</strong><span>${player.cash} kr</span><em>${tokenAvatar(player, "mini")} ${tokenLabel(player.token) || "Väljer pjäs"}${player.jailed ? " · Fängslad" : ""}</em></div>`)
     .join("");
 
   const tokenPanel = document.getElementById("token-status");
@@ -75,34 +76,44 @@ function renderTv(state) {
 }
 
 function renderMobile(state) {
+  syncNameInput();
+  const localPlayerName = localPlayer();
+  const local = state.players.find((player) => player.name === localPlayerName);
   document.getElementById("mobile-status").textContent =
     state.phase === "token_selection"
       ? `${state.currentPlayer} väljer pjäs.`
       : state.phase === "auction"
         ? `Auktion pågår.`
-      : `${state.currentPlayer} har tur.`;
+        : local?.name === state.currentPlayer
+          ? "Det är din tur."
+          : `${state.currentPlayer} har tur.`;
   document.getElementById("mobile-bank-message").textContent = state.bankMessage;
-  document.getElementById("join-button").addEventListener("click", () => {
+  document.getElementById("join-button").onclick = () => {
     const room = document.getElementById("room-input").value || state.roomCode;
-    document.getElementById("mobile-status").textContent = `Ansluten till ${room}. Riktiga sessioner kommer i nästa steg.`;
-  });
+    document.getElementById("mobile-status").textContent = `Ansluten till ${room}.`;
+  };
+  document.getElementById("save-name-button").onclick = () => {
+    saveLocalPlayer(document.getElementById("player-name-input").value);
+    renderMobile(state);
+  };
 
+  renderPlayerSummary(state, local);
   renderTokenButtons(state);
-  renderPropertyCard(document.getElementById("mobile-card"), selectedSpace(state));
+  renderPropertyCard(document.getElementById("mobile-card"), selectedSpace(state, local));
   renderEvents(document.getElementById("mobile-events"), state.events);
-  renderOfferControls(state);
-  renderAuctionControls(state);
-  renderBuildControls(state);
+  renderOfferControls(state, local);
+  renderAuctionControls(state, local);
+  renderBuildControls(state, local);
   document.getElementById("roll-button").onclick = async () => {
-    const updated = await postAction("/api/game/roll", "");
+    const updated = await postAction("/api/game/roll", playerBody());
     renderMobile(updated);
   };
   document.getElementById("buy-button").onclick = async () => {
-    const updated = await postAction("/api/game/buy", "");
+    const updated = await postAction("/api/game/buy", playerBody());
     renderMobile(updated);
   };
   document.getElementById("decline-button").onclick = async () => {
-    const updated = await postAction("/api/game/decline", "");
+    const updated = await postAction("/api/game/decline", playerBody());
     renderMobile(updated);
   };
   document.getElementById("new-game-button").onclick = async () => {
@@ -154,11 +165,11 @@ function spaceDetails(space) {
   return "";
 }
 
-function selectedSpace(state) {
+function selectedSpace(state, preferredPlayer) {
   if (state.drawnCard) return drawnCardAsSpace(state.drawnCard);
   if (state.pendingOffer) return state.spaces[state.pendingOffer.spaceIndex];
   if (state.auction) return state.spaces[state.auction.spaceIndex];
-  const current = state.players.find((player) => player.name === state.currentPlayer) || state.players[0];
+  const current = preferredPlayer || state.players.find((player) => player.name === state.currentPlayer) || state.players[0];
   return state.spaces[current?.position || 0];
 }
 
@@ -221,19 +232,21 @@ function cardIcon(icon) {
 function tokensAt(players, position) {
   return players
     .filter((player) => player.position === position && player.token)
-    .map((player) => `<span title="${player.name}">${tokenIcon(player.token)}</span>`)
+    .map((player) => tokenAvatar(player, "mini"))
     .join("");
 }
 
-function renderOfferControls(state) {
+function renderOfferControls(state, localPlayer) {
   const buyButton = document.getElementById("buy-button");
   const declineButton = document.getElementById("decline-button");
   const rollButton = document.getElementById("roll-button");
   const offer = state.pendingOffer;
+  const isLocalTurn = localPlayer?.name === state.currentPlayer;
+  const offerForLocal = Boolean(offer && localPlayer?.name === offer.player);
 
-  buyButton.disabled = !offer;
-  declineButton.disabled = !offer;
-  rollButton.disabled = Boolean(offer) || Boolean(state.auction) || state.phase === "token_selection";
+  buyButton.disabled = !offerForLocal;
+  declineButton.disabled = !offerForLocal;
+  rollButton.disabled = !isLocalTurn || Boolean(offer) || Boolean(state.auction) || state.phase === "token_selection";
 
   if (offer) {
     buyButton.textContent = `Köp ${offer.spaceName}`;
@@ -244,7 +257,7 @@ function renderOfferControls(state) {
   }
 }
 
-function renderAuctionControls(state) {
+function renderAuctionControls(state, localPlayer) {
   const panel = document.getElementById("auction-panel");
   if (!state.auction) {
     panel.innerHTML = "";
@@ -252,15 +265,11 @@ function renderAuctionControls(state) {
   }
 
   const auction = state.auction;
-  const bidderButtons = state.players
-    .map((player) => {
-      const bid100 = auction.nextBid;
-      const bid500 = auction.highestBid + 500;
-      const disabled100 = player.cash < bid100 ? "disabled" : "";
-      const disabled500 = player.cash < bid500 ? "disabled" : "";
-      return `<div class="auction-row"><strong>${player.name}</strong><button type="button" data-bidder="${player.name}" data-amount="${bid100}" ${disabled100}>${bid100} kr</button><button type="button" data-bidder="${player.name}" data-amount="${bid500}" ${disabled500}>${bid500} kr</button></div>`;
-    })
-    .join("");
+  const bid100 = auction.nextBid;
+  const bid500 = auction.highestBid + 500;
+  const bidderButtons = localPlayer
+    ? `<div class="auction-row"><strong>${escapeHtml(localPlayer.name)}</strong><button type="button" data-bidder="${escapeHtml(localPlayer.name)}" data-amount="${bid100}" ${localPlayer.cash < bid100 ? "disabled" : ""}>${bid100} kr</button><button type="button" data-bidder="${escapeHtml(localPlayer.name)}" data-amount="${bid500}" ${localPlayer.cash < bid500 ? "disabled" : ""}>${bid500} kr</button></div>`
+    : `<p>Skriv ditt namn och välj pjäs för att lägga bud.</p>`;
 
   panel.innerHTML = `<h3>Auktion: ${auction.spaceName}</h3><p>Högsta bud: ${auction.highestBid} kr${auction.highestBidder ? `, ${auction.highestBidder}` : ""}</p>${bidderButtons}<button id="finish-auction-button" type="button">Slutför auktion</button>`;
 
@@ -281,13 +290,14 @@ function renderAuctionControls(state) {
   };
 }
 
-function renderBuildControls(state) {
+function renderBuildControls(state, localPlayer) {
   const panel = document.getElementById("build-panel");
   const buildButton = document.getElementById("build-button");
   if (!panel || !buildButton) return;
 
+  const isLocalTurn = localPlayer?.name === state.currentPlayer;
   const options = state.buildableProperties || [];
-  buildButton.disabled = options.length === 0 || !options.some((option) => option.canBuild);
+  buildButton.disabled = !isLocalTurn || options.length === 0 || !options.some((option) => option.canBuild);
 
   if (options.length === 0) {
     panel.innerHTML = "";
@@ -297,22 +307,22 @@ function renderBuildControls(state) {
   }
 
   panel.innerHTML = `<h3>Byggnader</h3>${options
-    .map((option) => `<button type="button" data-build="${option.spaceIndex}" ${option.canBuild ? "" : "disabled"}><strong>${option.spaceName}</strong><span>${option.label} → ${option.nextLabel}</span><em>${option.buildCost} kr · ny hyra ${option.rentAfter} kr</em></button>`)
+    .map((option) => `<button type="button" data-build="${option.spaceIndex}" ${isLocalTurn && option.canBuild ? "" : "disabled"}><strong>${option.spaceName}</strong><span>${option.label} → ${option.nextLabel}</span><em>${option.buildCost} kr · ny hyra ${option.rentAfter} kr</em></button>`)
     .join("")}`;
 
   panel.querySelectorAll("button[data-build]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const body = new URLSearchParams({ spaceIndex: button.dataset.build });
+      const body = new URLSearchParams({ player: localPlayerName(), spaceIndex: button.dataset.build });
       const updated = await postAction("/api/game/build", body.toString());
       renderMobile(updated);
     });
   });
 
   const first = options.find((option) => option.canBuild);
-  buildButton.textContent = first ? `Bygg ${first.spaceName}` : "Bygg";
-  buildButton.onclick = first
+  buildButton.textContent = first && isLocalTurn ? `Bygg ${first.spaceName}` : "Bygg";
+  buildButton.onclick = first && isLocalTurn
     ? async () => {
-        const body = new URLSearchParams({ spaceIndex: first.spaceIndex });
+        const body = new URLSearchParams({ player: localPlayerName(), spaceIndex: first.spaceIndex });
         const updated = await postAction("/api/game/build", body.toString());
         renderMobile(updated);
       }
@@ -321,16 +331,37 @@ function renderBuildControls(state) {
 
 function renderTokenButtons(state) {
   const panel = document.getElementById("token-buttons");
+  const name = localPlayerName();
+  const alreadyPicked = state.players.some((player) => player.name === name && player.token);
+  const canPickToken = state.phase === "token_selection" && state.currentPlayer && name.length > 0 && !alreadyPicked;
   panel.innerHTML = state.tokenChoices
-    .map((token) => `<button type="button" data-token="${token.id}" ${token.available ? "" : "disabled"}>${token.label}</button>`)
+    .map((token) => `<button type="button" data-token="${token.id}" ${token.available && canPickToken ? "" : "disabled"}>${tokenAvatar({ name, token: token.id }, "choice")}<span>${token.label}</span></button>`)
     .join("");
 
   panel.querySelectorAll("button[data-token]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const updated = await postAction("/api/game/select-token", `token=${encodeURIComponent(button.dataset.token)}`);
+      saveLocalPlayer(localPlayerName());
+      const body = new URLSearchParams({ player: localPlayerName(), token: button.dataset.token });
+      const updated = await postAction("/api/game/select-token", body.toString());
       renderMobile(updated);
     });
   });
+}
+
+function renderPlayerSummary(state, localPlayer) {
+  const summary = document.getElementById("player-summary");
+  if (!summary) return;
+  const name = localPlayerName();
+  if (!name) {
+    summary.innerHTML = `<strong>Ingen spelare vald</strong><span>Skriv ditt namn innan du tar pjäs.</span>`;
+    return;
+  }
+  if (!localPlayer) {
+    summary.innerHTML = `<strong>${escapeHtml(name)}</strong><span>Väntar på att du väljer pjäs.</span>`;
+    return;
+  }
+  const space = state.spaces[localPlayer.position];
+  summary.innerHTML = `${tokenAvatar(localPlayer, "large")}<div><strong>${escapeHtml(localPlayer.name)}</strong><span>${tokenLabel(localPlayer.token) || "Ingen pjäs"} · ${space?.name || "Okänd ruta"} · ${localPlayer.cash} kr${localPlayer.jailed ? " · Fängslad" : ""}</span></div>`;
 }
 
 function buildingMarkers(space) {
@@ -350,6 +381,42 @@ function buildingLabel(level) {
   }[level] || "hotell";
 }
 
+function syncNameInput() {
+  const input = document.getElementById("player-name-input");
+  if (input && !input.value) input.value = localPlayerName();
+}
+
+function localPlayerName() {
+  const input = document.getElementById("player-name-input");
+  const typed = cleanName(input?.value || "");
+  return typed || localStorage.getItem("eutherpal.playerName") || "";
+}
+
+function localPlayer() {
+  return localPlayerName();
+}
+
+function saveLocalPlayer(name) {
+  const cleaned = cleanName(name);
+  if (cleaned) localStorage.setItem("eutherpal.playerName", cleaned);
+}
+
+function playerBody() {
+  return new URLSearchParams({ player: localPlayerName() }).toString();
+}
+
+function cleanName(name) {
+  return (name || "").trim().replace(/[\u0000-\u001f]/g, "").slice(0, 24);
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
 function tokenLabel(token) {
   return {
     bil: "Bil",
@@ -360,14 +427,24 @@ function tokenLabel(token) {
   }[token] || "";
 }
 
-function tokenIcon(token) {
-  return {
-    bil: "Bil",
-    hatt: "Hatt",
-    skepp: "Skepp",
-    hund: "Hund",
-    sko: "Sko",
-  }[token] || "?";
+function tokenAvatar(player, size = "mini") {
+  const token = player?.token || "none";
+  const name = player?.name || "";
+  const glyph = {
+    bil: "BI",
+    hatt: "HA",
+    skepp: "SK",
+    hund: "HU",
+    sko: "SO",
+  }[token] || initials(name);
+  const title = `${escapeHtml(name)} ${tokenLabel(token)}`.trim();
+  return `<span class="token-avatar token-${token} token-${size}" title="${title}"><i>${escapeHtml(glyph)}</i></span>`;
+}
+
+function initials(name) {
+  const parts = cleanName(name).split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "EP";
+  return parts.slice(0, 2).map((part) => part[0].toUpperCase()).join("");
 }
 
 function tileClass(space, index) {

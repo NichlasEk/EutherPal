@@ -192,32 +192,47 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
             let token = form_value(&body, "token")
                 .or_else(|| query_value(query, "token"))
                 .unwrap_or_default();
+            let player_name = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
             let mut game = game.lock().expect("game state lock");
-            game.select_token(&token);
+            game.select_token(&token, &player_name);
             json(200, &game.to_json())
         }
         ("POST", "/api/game/roll") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
             let mut game = game.lock().expect("game state lock");
-            game.roll_current_player();
+            game.roll_current_player(&player);
             json(200, &game.to_json())
         }
         ("POST", "/api/game/buy") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
             let mut game = game.lock().expect("game state lock");
-            game.buy_pending_property();
+            game.buy_pending_property(&player);
             json(200, &game.to_json())
         }
         ("POST", "/api/game/decline") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
             let mut game = game.lock().expect("game state lock");
-            game.decline_pending_property();
+            game.decline_pending_property(&player);
             json(200, &game.to_json())
         }
         ("POST", "/api/game/build") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
             let space_index = form_value(&body, "spaceIndex")
                 .or_else(|| query_value(query, "spaceIndex"))
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(usize::MAX);
             let mut game = game.lock().expect("game state lock");
-            game.build_property(space_index);
+            game.build_property(space_index, &player);
             json(200, &game.to_json())
         }
         ("POST", "/api/game/auction/bid") => {
@@ -288,10 +303,10 @@ impl GameState {
         let owners = vec![None; spaces.len()];
         let buildings = vec![0; spaces.len()];
         let players = vec![
-            Player::new("Anna"),
-            Player::new("Bo"),
-            Player::new("Cleo"),
-            Player::new("David"),
+            Player::new("Spelare 1"),
+            Player::new("Spelare 2"),
+            Player::new("Spelare 3"),
+            Player::new("Spelare 4"),
         ];
         let first = random_index(players.len());
         let mut selection_order = Vec::new();
@@ -325,7 +340,7 @@ impl GameState {
         }
     }
 
-    fn select_token(&mut self, token: &str) {
+    fn select_token(&mut self, token: &str, requested_name: &str) {
         if self.phase != Phase::TokenSelection {
             self.bank_message = "Pjäsvalet är redan klart. Nu är spelet igång.".to_string();
             return;
@@ -346,6 +361,22 @@ impl GameState {
         }
 
         let player_index = self.selection_order[self.selection_cursor];
+        let chosen_name = clean_player_name(requested_name);
+        if chosen_name.is_empty() {
+            self.bank_message = "Skriv in ditt namn innan du väljer pjäs.".to_string();
+            return;
+        }
+        if self
+            .players
+            .iter()
+            .enumerate()
+            .any(|(index, player)| index != player_index && player.name == chosen_name)
+        {
+            self.bank_message = "Det namnet används redan av en annan spelare.".to_string();
+            return;
+        }
+
+        self.players[player_index].name = chosen_name;
         let player_name = self.players[player_index].name.clone();
         let token_label = token_label(token);
         self.players[player_index].token = Some(token.to_string());
@@ -368,10 +399,13 @@ impl GameState {
         }
     }
 
-    fn roll_current_player(&mut self) {
+    fn roll_current_player(&mut self, player_name: &str) {
         if self.phase != Phase::Play {
             self.bank_message =
                 "Alla spelare måste välja pjäs innan första tärningsslaget.".to_string();
+            return;
+        }
+        if !self.is_authorized_current_player(player_name) {
             return;
         }
         if self.pending_offer.is_some() {
@@ -477,7 +511,10 @@ impl GameState {
         }
     }
 
-    fn buy_pending_property(&mut self) {
+    fn buy_pending_property(&mut self, player_name: &str) {
+        if !self.is_authorized_current_player(player_name) {
+            return;
+        }
         let Some(offer) = self.pending_offer.take() else {
             self.bank_message = "Det finns ingen fastighet att köpa just nu.".to_string();
             return;
@@ -512,7 +549,10 @@ impl GameState {
         self.finish_turn_after_roll();
     }
 
-    fn decline_pending_property(&mut self) {
+    fn decline_pending_property(&mut self, player_name: &str) {
+        if !self.is_authorized_current_player(player_name) {
+            return;
+        }
         let Some(offer) = self.pending_offer.take() else {
             self.bank_message = "Det finns ingen köpfråga att avstå.".to_string();
             return;
@@ -603,9 +643,12 @@ impl GameState {
         self.finish_turn_after_roll();
     }
 
-    fn build_property(&mut self, space_index: usize) {
+    fn build_property(&mut self, space_index: usize, player_name: &str) {
         if self.phase != Phase::Play {
             self.bank_message = "Byggande kan bara göras när spelet är igång.".to_string();
+            return;
+        }
+        if !self.is_authorized_current_player(player_name) {
             return;
         }
         if self.pending_offer.is_some() || self.auction.is_some() {
@@ -635,6 +678,21 @@ impl GameState {
         };
 
         self.bank_message = error;
+    }
+
+    fn is_authorized_current_player(&mut self, player_name: &str) -> bool {
+        let cleaned = clean_player_name(player_name);
+        if cleaned.is_empty() {
+            return true;
+        }
+        if self.players[self.current_player_index].name == cleaned {
+            return true;
+        }
+        self.bank_message = format!(
+            "Det är {}s tur, inte {}s.",
+            self.players[self.current_player_index].name, cleaned
+        );
+        false
     }
 
     fn build_error(&self, player_index: usize, space_index: usize) -> Option<String> {
@@ -1407,6 +1465,14 @@ fn token_label(token: &str) -> &'static str {
         .unwrap_or("pjäsen")
 }
 
+fn clean_player_name(name: &str) -> String {
+    name.trim()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(24)
+        .collect()
+}
+
 fn building_label(level: u8) -> &'static str {
     match level {
         0 => "ingen byggnad",
@@ -1462,7 +1528,7 @@ mod tests {
         game.owners[3] = Some(0);
         let cash_before = game.players[0].cash;
 
-        game.build_property(1);
+        game.build_property(1, "");
 
         assert_eq!(game.buildings[1], 1);
         assert_eq!(game.players[0].cash, cash_before - 500);
@@ -1477,13 +1543,25 @@ mod tests {
             game.owners[index] = Some(0);
         }
 
-        game.build_property(6);
-        game.build_property(6);
+        game.build_property(6, "");
+        game.build_property(6, "");
 
         assert_eq!(game.buildings[6], 1);
         assert!(game.bank_message.contains("Bygg jämnt"));
 
-        game.build_property(8);
+        game.build_property(8, "");
         assert_eq!(game.buildings[8], 1);
+    }
+
+    #[test]
+    fn rejects_action_from_wrong_mobile_player() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+        game.players[1].name = "Noel".to_string();
+
+        game.roll_current_player("Noel");
+
+        assert_eq!(game.players[0].position, 0);
+        assert!(game.bank_message.contains("Majas tur"));
     }
 }
