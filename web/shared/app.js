@@ -60,7 +60,7 @@ function renderTv(state) {
 
   const players = document.getElementById("players");
   players.innerHTML = state.players
-    .map((player) => `<div class="player-row"><strong>${player.name}</strong><span>${player.cash} kr</span><em>${tokenLabel(player.token) || "Väljer pjäs"}</em></div>`)
+    .map((player) => `<div class="player-row"><strong>${player.name}</strong><span>${player.cash} kr</span><em>${tokenLabel(player.token) || "Väljer pjäs"}${player.jailed ? " · Fängslad" : ""}</em></div>`)
     .join("");
 
   const tokenPanel = document.getElementById("token-status");
@@ -166,6 +166,7 @@ function renderPropertyCard(container, space) {
   const meta = [
     space.price ? `Pris ${space.price} kr` : "",
     space.rent ? `Hyra ${space.rent} kr` : "",
+    space.amount ? `Belopp ${space.amount} kr` : "",
     space.owner ? `Ägare ${space.owner}` : "",
   ].filter(Boolean);
   container.className = `property-card card-${space.color || space.kind}`;

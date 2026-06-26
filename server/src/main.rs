@@ -31,6 +31,7 @@ struct Player {
     cash: i32,
     position: usize,
     token: Option<String>,
+    jailed: bool,
 }
 
 #[derive(Clone)]
@@ -41,6 +42,8 @@ struct BoardSpace {
     color: Option<String>,
     price: Option<i32>,
     rent: Option<i32>,
+    amount: Option<i32>,
+    target: Option<usize>,
     card_title: Option<String>,
     card_text: Option<String>,
     card_icon: Option<String>,
@@ -353,6 +356,7 @@ impl GameState {
             "{} slog {} + {} och gick till {}.",
             player_name, self.dice[0], self.dice[1], landed.name
         ));
+        let mut force_end_turn = false;
 
         if landed.is_buyable() {
             match self.owners[landed_index] {
@@ -388,7 +392,37 @@ impl GameState {
             }
         }
 
-        self.finish_turn_after_roll();
+        if landed.kind == "tax" {
+            let amount = landed.amount.unwrap_or(0);
+            self.players[self.current_player_index].cash -= amount;
+            self.bank_message
+                .push_str(&format!(" Betala {} kr till banken.", amount));
+            self.push_event(format!(
+                "{player_name} betalade {} kr i {}.",
+                amount, landed.name
+            ));
+        } else if landed.kind == "go_to_jail" {
+            let target = landed.target.unwrap_or(10);
+            self.players[self.current_player_index].position = target;
+            self.players[self.current_player_index].jailed = true;
+            let target_name = self
+                .spaces
+                .get(target)
+                .map(|space| space.name.clone())
+                .unwrap_or_else(|| "Fängelse".to_string());
+            self.bank_message.push_str(&format!(
+                " {} går direkt till {}.",
+                player_name, target_name
+            ));
+            self.push_event(format!("{player_name} gick direkt till {target_name}."));
+            force_end_turn = true;
+        }
+
+        if force_end_turn {
+            self.current_player_index = (self.current_player_index + 1) % self.players.len();
+        } else {
+            self.finish_turn_after_roll();
+        }
     }
 
     fn buy_pending_property(&mut self) {
@@ -548,11 +582,12 @@ impl GameState {
             .iter()
             .map(|player| {
                 format!(
-                    "{{\"name\":\"{}\",\"cash\":{},\"position\":{},\"token\":{}}}",
+                    "{{\"name\":\"{}\",\"cash\":{},\"position\":{},\"token\":{},\"jailed\":{}}}",
                     escape_json(&player.name),
                     player.cash,
                     player.position,
-                    optional_json_string(player.token.as_deref())
+                    optional_json_string(player.token.as_deref()),
+                    player.jailed
                 )
             })
             .collect::<Vec<_>>()
@@ -565,13 +600,15 @@ impl GameState {
                     .map(|owner| format!("\"{}\"", escape_json(&self.players[owner].name)))
                     .unwrap_or_else(|| "null".to_string());
                 format!(
-                    "{{\"index\":{},\"kind\":\"{}\",\"name\":\"{}\",\"color\":{},\"price\":{},\"rent\":{},\"owner\":{},\"cardTitle\":{},\"cardText\":{},\"cardIcon\":{}}}",
+                    "{{\"index\":{},\"kind\":\"{}\",\"name\":\"{}\",\"color\":{},\"price\":{},\"rent\":{},\"amount\":{},\"target\":{},\"owner\":{},\"cardTitle\":{},\"cardText\":{},\"cardIcon\":{}}}",
                     space.index,
                     escape_json(&space.kind),
                     escape_json(&space.name),
                     optional_json_string(space.color.as_deref()),
                     optional_json_number(space.price),
                     optional_json_number(space.rent),
+                    optional_json_number(space.amount),
+                    optional_json_usize(space.target),
                     owner,
                     optional_json_string(space.card_title.as_deref()),
                     optional_json_string(space.card_text.as_deref()),
@@ -684,6 +721,7 @@ impl Player {
             cash: 15000,
             position: 0,
             token: None,
+            jailed: false,
         }
     }
 }
@@ -797,6 +835,12 @@ fn optional_json_number(value: Option<i32>) -> String {
         .unwrap_or_else(|| "null".to_string())
 }
 
+fn optional_json_usize(value: Option<usize>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
+}
+
 fn escape_json(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -834,6 +878,8 @@ fn parse_space_block(lines: &[String]) -> BoardSpace {
     let mut color = None;
     let mut price = None;
     let mut rent = None;
+    let mut amount = None;
+    let mut target = None;
     let mut card_title = None;
     let mut card_text = None;
     let mut card_icon = None;
@@ -851,6 +897,8 @@ fn parse_space_block(lines: &[String]) -> BoardSpace {
             "color" => color = Some(trim_toml_quotes(value).to_string()),
             "price" => price = value.parse().ok(),
             "rent" => rent = value.parse().ok(),
+            "amount" => amount = value.parse().ok(),
+            "target" => target = value.parse().ok(),
             "card_title" => card_title = Some(trim_toml_quotes(value).to_string()),
             "card_text" => card_text = Some(trim_toml_quotes(value).to_string()),
             "card_icon" => card_icon = Some(trim_toml_quotes(value).to_string()),
@@ -865,6 +913,8 @@ fn parse_space_block(lines: &[String]) -> BoardSpace {
         color,
         price,
         rent,
+        amount,
+        target,
         card_title,
         card_text,
         card_icon,

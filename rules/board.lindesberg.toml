@@ -35,6 +35,10 @@ card_icon = "brown"
 index = 4
 kind = "tax"
 name = "Inkomstskatt"
+amount = 2000
+card_title = "Inkomstskatt"
+card_text = "Betala 2000 kr till banken."
+card_icon = "tax"
 
 [[spaces]]
 index = 5
@@ -88,6 +92,9 @@ card_icon = "light_blue"
 index = 10
 kind = "jail"
 name = "Fängelse"
+card_title = "Fängelse"
+card_text = "Besök eller vänta på frigivning. Hamnar du här via Gå i fängelse markeras du som fängslad."
+card_icon = "jail"
 
 [[spaces]]
 index = 11
@@ -280,6 +287,10 @@ card_icon = "yellow"
 index = 30
 kind = "go_to_jail"
 name = "Gå i fängelse"
+target = 10
+card_title = "Gå i fängelse"
+card_text = "Gå direkt till fängelset. Gå inte via Gå."
+card_icon = "jail"
 
 [[spaces]]
 index = 31
@@ -349,6 +360,10 @@ card_icon = "blue"
 index = 38
 kind = "tax"
 name = "Lyxskatt"
+amount = 1000
+card_title = "Lyxskatt"
+card_text = "Betala 1000 kr till banken."
+card_icon = "tax"
 
 [[spaces]]
 index = 39
