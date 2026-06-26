@@ -75,6 +75,8 @@ function renderMobile(state) {
   document.getElementById("mobile-status").textContent =
     state.phase === "token_selection"
       ? `${state.currentPlayer} väljer pjäs.`
+      : state.phase === "auction"
+        ? `Auktion pågår.`
       : `${state.currentPlayer} har tur.`;
   document.getElementById("mobile-bank-message").textContent = state.bankMessage;
   document.getElementById("join-button").addEventListener("click", () => {
@@ -84,6 +86,7 @@ function renderMobile(state) {
 
   renderTokenButtons(state);
   renderOfferControls(state);
+  renderAuctionControls(state);
   document.getElementById("roll-button").onclick = async () => {
     const updated = await postAction("/api/game/roll", "");
     renderMobile(updated);
@@ -159,7 +162,7 @@ function renderOfferControls(state) {
 
   buyButton.disabled = !offer;
   declineButton.disabled = !offer;
-  rollButton.disabled = Boolean(offer) || state.phase === "token_selection";
+  rollButton.disabled = Boolean(offer) || Boolean(state.auction) || state.phase === "token_selection";
 
   if (offer) {
     buyButton.textContent = `Köp ${offer.spaceName}`;
@@ -168,6 +171,43 @@ function renderOfferControls(state) {
     buyButton.textContent = "Köp fastighet";
     declineButton.textContent = "Avstå";
   }
+}
+
+function renderAuctionControls(state) {
+  const panel = document.getElementById("auction-panel");
+  if (!state.auction) {
+    panel.innerHTML = "";
+    return;
+  }
+
+  const auction = state.auction;
+  const bidderButtons = state.players
+    .map((player) => {
+      const bid100 = auction.nextBid;
+      const bid500 = auction.highestBid + 500;
+      const disabled100 = player.cash < bid100 ? "disabled" : "";
+      const disabled500 = player.cash < bid500 ? "disabled" : "";
+      return `<div class="auction-row"><strong>${player.name}</strong><button type="button" data-bidder="${player.name}" data-amount="${bid100}" ${disabled100}>${bid100} kr</button><button type="button" data-bidder="${player.name}" data-amount="${bid500}" ${disabled500}>${bid500} kr</button></div>`;
+    })
+    .join("");
+
+  panel.innerHTML = `<h3>Auktion: ${auction.spaceName}</h3><p>Högsta bud: ${auction.highestBid} kr${auction.highestBidder ? `, ${auction.highestBidder}` : ""}</p>${bidderButtons}<button id="finish-auction-button" type="button">Slutför auktion</button>`;
+
+  panel.querySelectorAll("button[data-bidder]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const body = new URLSearchParams({
+        player: button.dataset.bidder,
+        amount: button.dataset.amount,
+      });
+      const updated = await postAction("/api/game/auction/bid", body.toString());
+      renderMobile(updated);
+    });
+  });
+
+  document.getElementById("finish-auction-button").onclick = async () => {
+    const updated = await postAction("/api/game/auction/finish", "");
+    renderMobile(updated);
+  };
 }
 
 function renderTokenButtons(state) {

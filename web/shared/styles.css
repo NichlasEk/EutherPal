@@ -348,6 +348,42 @@ textarea {
   gap: 8px;
 }
 
+.auction-panel {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.auction-panel:empty {
+  display: none;
+}
+
+.auction-panel h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.auction-panel p {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.auction-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.auction-row strong {
+  min-width: 0;
+}
+
+.auction-row button {
+  min-width: 76px;
+}
+
 .token-buttons,
 .token-status {
   display: grid;

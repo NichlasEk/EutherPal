@@ -48,6 +48,13 @@ struct PendingOffer {
     space_index: usize,
 }
 
+struct AuctionState {
+    space_index: usize,
+    seller_turn_index: usize,
+    highest_bid: i32,
+    highest_bidder: Option<usize>,
+}
+
 struct GameState {
     room_code: String,
     phase: Phase,
@@ -59,6 +66,7 @@ struct GameState {
     current_player_index: usize,
     dice: [u8; 2],
     pending_offer: Option<PendingOffer>,
+    auction: Option<AuctionState>,
     bank_message: String,
 }
 
@@ -66,6 +74,7 @@ struct GameState {
 enum Phase {
     TokenSelection,
     Play,
+    Auction,
 }
 
 type SharedGame = Arc<Mutex<GameState>>;
@@ -165,6 +174,23 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
             game.decline_pending_property();
             json(200, &game.to_json())
         }
+        ("POST", "/api/game/auction/bid") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
+            let amount = form_value(&body, "amount")
+                .or_else(|| query_value(query, "amount"))
+                .and_then(|value| value.parse::<i32>().ok())
+                .unwrap_or(0);
+            let mut game = game.lock().expect("game state lock");
+            game.place_auction_bid(&player, amount);
+            json(200, &game.to_json())
+        }
+        ("POST", "/api/game/auction/finish") => {
+            let mut game = game.lock().expect("game state lock");
+            game.finish_auction();
+            json(200, &game.to_json())
+        }
         ("GET", "/tv") | ("GET", "/tv/") => html(200, TV_HTML),
         ("GET", "/mobile") | ("GET", "/mobile/") => html(200, MOBILE_HTML),
         ("GET", "/admin") | ("GET", "/admin/") => html(200, ADMIN_HTML),
@@ -237,6 +263,7 @@ impl GameState {
             current_player_index: first,
             dice: [0, 0],
             pending_offer: None,
+            auction: None,
             bank_message: format!(
                 "{first_name} börjar och väljer pjäs först. Välj en av de fem klassiska pjäserna."
             ),
@@ -293,6 +320,10 @@ impl GameState {
         }
         if self.pending_offer.is_some() {
             self.bank_message = "Avsluta köpfrågan innan nästa tärningsslag.".to_string();
+            return;
+        }
+        if self.auction.is_some() {
+            self.bank_message = "Avsluta auktionen innan nästa tärningsslag.".to_string();
             return;
         }
 
@@ -381,10 +412,75 @@ impl GameState {
             return;
         };
         let space = self.spaces[offer.space_index].clone();
+        self.phase = Phase::Auction;
+        self.auction = Some(AuctionState {
+            space_index: offer.space_index,
+            seller_turn_index: offer.player_index,
+            highest_bid: 0,
+            highest_bidder: None,
+        });
         self.bank_message = format!(
-            "{} avstår från att köpa {}. Auktion kommer i en senare version.",
+            "{} avstår från att köpa {}. Auktionen startar på 0 kr.",
             self.players[offer.player_index].name, space.name
         );
+    }
+
+    fn place_auction_bid(&mut self, player_name: &str, amount: i32) {
+        let Some(auction) = &mut self.auction else {
+            self.bank_message = "Det finns ingen aktiv auktion.".to_string();
+            return;
+        };
+        let Some(player_index) = self
+            .players
+            .iter()
+            .position(|player| player.name == player_name)
+        else {
+            self.bank_message = "Okänd spelare kan inte lägga bud.".to_string();
+            return;
+        };
+        if amount <= auction.highest_bid {
+            self.bank_message = format!("Budet måste vara högre än {} kr.", auction.highest_bid);
+            return;
+        }
+        if self.players[player_index].cash < amount {
+            self.bank_message = format!(
+                "{} har inte råd att bjuda {} kr.",
+                self.players[player_index].name, amount
+            );
+            return;
+        }
+
+        auction.highest_bid = amount;
+        auction.highest_bidder = Some(player_index);
+        let space_name = self.spaces[auction.space_index].name.clone();
+        self.bank_message = format!(
+            "{} leder auktionen på {} med {} kr.",
+            self.players[player_index].name, space_name, amount
+        );
+    }
+
+    fn finish_auction(&mut self) {
+        let Some(auction) = self.auction.take() else {
+            self.bank_message = "Det finns ingen aktiv auktion att avsluta.".to_string();
+            return;
+        };
+
+        let space = self.spaces[auction.space_index].clone();
+        if let Some(winner) = auction.highest_bidder {
+            self.players[winner].cash -= auction.highest_bid;
+            self.owners[auction.space_index] = Some(winner);
+            self.bank_message = format!(
+                "{} vinner auktionen på {} för {} kr.",
+                self.players[winner].name, space.name, auction.highest_bid
+            );
+        } else {
+            self.bank_message = format!(
+                "Ingen lade bud på {}. Rutan är fortfarande ledig.",
+                space.name
+            );
+        }
+
+        self.phase = Phase::Play;
         self.finish_turn_after_roll();
     }
 
@@ -459,18 +555,15 @@ impl GameState {
             .join(",");
 
         format!(
-            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"pendingOffer\":{},\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}]}}",
+            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"pendingOffer\":{},\"auction\":{},\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}]}}",
             escape_json(&self.room_code),
-            if self.phase == Phase::TokenSelection {
-                "token_selection"
-            } else {
-                "play"
-            },
+            self.phase.as_str(),
             escape_json(current),
             escape_json(&self.bank_message),
             self.dice[0],
             self.dice[1],
             self.pending_offer_json(),
+            self.auction_json(),
             players,
             token_choices,
             spaces
@@ -489,6 +582,40 @@ impl GameState {
             escape_json(&space.name),
             space.price.unwrap_or(0)
         )
+    }
+
+    fn auction_json(&self) -> String {
+        let Some(auction) = &self.auction else {
+            return "null".to_string();
+        };
+        let highest_bidder = auction
+            .highest_bidder
+            .map(|index| format!("\"{}\"", escape_json(&self.players[index].name)))
+            .unwrap_or_else(|| "null".to_string());
+        let next_bid = if auction.highest_bid == 0 {
+            100
+        } else {
+            auction.highest_bid + 100
+        };
+        format!(
+            "{{\"spaceIndex\":{},\"spaceName\":\"{}\",\"highestBid\":{},\"highestBidder\":{},\"nextBid\":{},\"seller\":\"{}\"}}",
+            auction.space_index,
+            escape_json(&self.spaces[auction.space_index].name),
+            auction.highest_bid,
+            highest_bidder,
+            next_bid,
+            escape_json(&self.players[auction.seller_turn_index].name)
+        )
+    }
+}
+
+impl Phase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Phase::TokenSelection => "token_selection",
+            Phase::Play => "play",
+            Phase::Auction => "auction",
+        }
     }
 }
 
