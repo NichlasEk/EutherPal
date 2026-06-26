@@ -121,6 +121,7 @@ struct GameState {
     bank_chat: Vec<BankChatMessage>,
     events: Vec<String>,
     bank_message: String,
+    bank_ai_status: String,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -181,7 +182,10 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
 
     let response = match (method, path) {
         ("GET", "/") => redirect("/tv"),
-        ("GET", "/health") => json(200, r#"{"status":"ok","service":"eutherpal","ai":"mock"}"#),
+        ("GET", "/health") => {
+            let game = game.lock().expect("game state lock");
+            json(200, &health_json(&game))
+        },
         ("GET", "/api/game") | ("GET", "/api/game/mock") => {
             let game = game.lock().expect("game state lock");
             json(200, &game.to_json())
@@ -428,6 +432,43 @@ impl Settings {
     }
 }
 
+fn llm_model_name(settings: &Settings) -> String {
+    if settings.model == "supergemma" {
+        env::var("EUTHERPAL_LLM_MODEL")
+            .unwrap_or_else(|_| "supergemma4-26b-free:latest".to_string())
+    } else {
+        settings.model.clone()
+    }
+}
+
+fn llm_config_label() -> String {
+    let settings = load_settings();
+    let model = llm_model_name(&settings);
+    match env::var("EUTHERPAL_LLM_URL") {
+        Ok(url) if !url.trim().is_empty() && url != "mock" => format!("llm:{model}"),
+        _ => format!("mock:{model}"),
+    }
+}
+
+fn health_json(game: &GameState) -> String {
+    let settings = load_settings();
+    let model = llm_model_name(&settings);
+    let endpoint = env::var("EUTHERPAL_LLM_URL").unwrap_or_else(|_| "mock".to_string());
+    let mode = if endpoint.trim().is_empty() || endpoint == "mock" {
+        "mock"
+    } else {
+        "ollama"
+    };
+    format!(
+        "{{\"status\":\"ok\",\"service\":\"eutherpal\",\"ai\":\"{}\",\"llm\":{{\"mode\":\"{}\",\"model\":\"{}\",\"endpointConfigured\":{},\"lastBankStatus\":\"{}\"}}}}",
+        escape_json(&game.bank_ai_status),
+        mode,
+        escape_json(&model),
+        if mode == "ollama" { "true" } else { "false" },
+        escape_json(&game.bank_ai_status)
+    )
+}
+
 impl GameState {
     fn new() -> Self {
         Self::new_with_player_count(DEFAULT_PLAYER_COUNT)
@@ -478,6 +519,7 @@ impl GameState {
             bank_message: format!(
                 "{first_name} börjar och väljer pjäs först. Välj en av de fem klassiska pjäserna."
             ),
+            bank_ai_status: llm_config_label(),
         }
     }
 
@@ -1582,9 +1624,16 @@ impl GameState {
         }
 
         self.push_bank_message(&player_name, &message, false);
-        let answer = self
-            .llm_bank_answer(&player_name, &message)
-            .unwrap_or_else(|| self.mock_bank_answer(&player_name, &message));
+        let answer = match self.llm_bank_answer(&player_name, &message) {
+            Ok(answer) => {
+                self.bank_ai_status = llm_config_label();
+                answer
+            }
+            Err(error) => {
+                self.bank_ai_status = format!("mock fallback: {error}");
+                self.mock_bank_answer(&player_name, &message)
+            }
+        };
         self.bank_message = format!("Banken till {player_name}: {answer}");
         self.push_bank_message("Banken", &answer, true);
     }
@@ -1615,23 +1664,23 @@ impl GameState {
         }
     }
 
-    fn llm_bank_answer(&self, player_name: &str, message: &str) -> Option<String> {
-        let llm_url = env::var("EUTHERPAL_LLM_URL").ok()?;
+    fn llm_bank_answer(&self, player_name: &str, message: &str) -> Result<String, String> {
+        let llm_url = env::var("EUTHERPAL_LLM_URL")
+            .map_err(|_| "EUTHERPAL_LLM_URL saknas".to_string())?;
         if llm_url.trim().is_empty() || llm_url == "mock" {
-            return None;
+            return Err("LLM är satt till mock".to_string());
         }
         let settings = load_settings();
-        let model = if settings.model == "supergemma" {
-            env::var("EUTHERPAL_LLM_MODEL")
-                .unwrap_or_else(|_| "supergemma4-26b-free:latest".to_string())
-        } else {
-            settings.model
-        };
+        let model = llm_model_name(&settings);
         let prompt = self.bank_prompt(player_name, message, &settings.preprompt);
-        call_ollama_generate(&llm_url, &model, &prompt)
-            .ok()
-            .map(|answer| clean_chat_message(&answer))
-            .filter(|answer| !answer.is_empty())
+        let answer = call_ollama_generate(&llm_url, &model, &prompt)
+            .map_err(|error| error.to_string())
+            .map(|answer| clean_chat_message(&answer))?;
+        if answer.is_empty() {
+            Err("LLM gav tomt svar".to_string())
+        } else {
+            Ok(answer)
+        }
     }
 
     fn bank_prompt(&self, player_name: &str, message: &str, preprompt: &str) -> String {
