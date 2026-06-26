@@ -5,6 +5,9 @@ tmp/
 android-tv/build/
 android-tv/dist/
 android-tv/.keystore/
+android-mobile/build/
+android-mobile/dist/
+android-mobile/.keystore/
 *.apk
 *.jks
 *.keystore

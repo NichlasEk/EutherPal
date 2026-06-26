@@ -11,51 +11,141 @@
     <main class="phone-shell">
       <header class="phone-header">
         <p class="eyebrow">EutherPål</p>
-        <h1>Spelarpanel</h1>
+        <h1 id="mobile-view-title">Spelarpanel</h1>
+        <nav class="mobile-tabs" aria-label="Mobilvy">
+          <button class="active" type="button" data-mobile-tab="player" aria-selected="true">Spelare</button>
+          <button type="button" data-mobile-tab="admin" aria-selected="false">Admin</button>
+        </nav>
       </header>
 
-      <section class="control-panel">
-        <label for="room-input">Rumskod</label>
-        <div class="join-row">
-          <input id="room-input" value="PAL-001" inputmode="text">
-          <button id="join-button" type="button">Gå med</button>
-        </div>
-        <label for="player-name-input">Ditt namn</label>
-        <div class="join-row">
-          <input id="player-name-input" autocomplete="name" maxlength="24" inputmode="text">
-          <button id="save-name-button" type="button">Spara</button>
-        </div>
-        <div id="player-summary" class="player-summary"></div>
-      </section>
+      <div id="mobile-swipe" class="mobile-swipe">
+        <div class="mobile-pages">
+          <section class="mobile-page" data-mobile-page="player">
+            <section class="control-panel">
+              <label for="room-input">Rumskod</label>
+              <div class="join-row">
+                <input id="room-input" value="PAL-001" inputmode="text">
+                <button id="join-button" type="button">Gå med</button>
+              </div>
+              <label for="player-name-input">Ditt namn</label>
+              <div class="join-row">
+                <input id="player-name-input" autocomplete="name" maxlength="24" inputmode="text">
+                <button id="save-name-button" type="button">Spara</button>
+              </div>
+              <div id="player-summary" class="player-summary"></div>
+            </section>
 
-      <section class="control-panel">
-        <h2>Din tur</h2>
-        <p id="mobile-status">Hämtar spelstatus...</p>
-        <div id="mobile-card" class="property-card"></div>
-        <div id="token-buttons" class="token-buttons"></div>
-        <div id="auction-panel" class="auction-panel"></div>
-        <div id="jail-panel" class="asset-panel"></div>
-        <div id="build-panel" class="build-panel"></div>
-        <div id="asset-panel" class="asset-panel"></div>
-        <div class="action-grid">
-          <button id="roll-button" type="button">Kasta tärning</button>
-          <button id="buy-button" type="button">Köp fastighet</button>
-          <button id="decline-button" type="button">Avstå</button>
-          <button id="build-button" type="button">Bygg</button>
-          <button id="ask-bank-button" type="button">Fråga banken</button>
-        </div>
-      </section>
+            <section class="control-panel">
+              <h2>Din tur</h2>
+              <p id="mobile-status">Hämtar spelstatus...</p>
+              <div id="mobile-card" class="property-card"></div>
+              <div id="token-buttons" class="token-buttons"></div>
+              <div id="auction-panel" class="auction-panel"></div>
+              <div id="jail-panel" class="asset-panel"></div>
+              <div id="build-panel" class="build-panel"></div>
+              <div id="asset-panel" class="asset-panel"></div>
+              <div class="action-grid">
+                <button id="roll-button" type="button">Kasta tärning</button>
+                <button id="buy-button" type="button">Köp fastighet</button>
+                <button id="decline-button" type="button">Avstå</button>
+                <button id="build-button" type="button">Bygg</button>
+                <button id="ask-bank-button" type="button">Fråga banken</button>
+              </div>
+            </section>
 
-      <section class="control-panel">
-        <h2>Banken</h2>
-        <p id="mobile-bank-message">-</p>
-        <div id="bank-chat" class="bank-chat"></div>
-        <form id="bank-chat-form" class="bank-chat-form">
-          <input id="bank-chat-input" maxlength="280" placeholder="Fråga banken..." autocomplete="off">
-          <button type="submit">Skicka</button>
-        </form>
-        <ol id="mobile-events" class="event-list"></ol>
-      </section>
+            <section class="control-panel">
+              <h2>Banken</h2>
+              <p id="mobile-bank-message">-</p>
+              <div id="bank-chat" class="bank-chat"></div>
+              <form id="bank-chat-form" class="bank-chat-form">
+                <input id="bank-chat-input" maxlength="280" placeholder="Fråga banken..." autocomplete="off">
+                <button type="submit">Skicka</button>
+              </form>
+              <ol id="mobile-events" class="event-list"></ol>
+            </section>
+          </section>
+
+          <section class="mobile-page mobile-admin-page" data-mobile-page="admin">
+            <section class="control-panel">
+              <h2>Driftstatus</h2>
+              <dl class="status-grid">
+                <dt>Server</dt>
+                <dd id="admin-server">okänd</dd>
+                <dt>AI</dt>
+                <dd id="admin-ai">mock</dd>
+                <dt>Rum</dt>
+                <dd id="admin-room">-</dd>
+              </dl>
+            </section>
+
+            <section class="control-panel">
+              <h2>Nytt spel</h2>
+              <div class="admin-actions">
+                <button id="admin-save-game" type="button">Spara spel</button>
+                <button id="admin-load-game" type="button">Ladda spel</button>
+                <button id="admin-demo-game" type="button">Demo-seed</button>
+                <label class="inline-control" for="admin-new-game-players">
+                  <span>Spelare</span>
+                  <select id="admin-new-game-players">
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4" selected>4</option>
+                    <option value="5">5</option>
+                  </select>
+                </label>
+                <button id="admin-new-game" type="button">Starta nytt spel</button>
+              </div>
+              <form id="admin-adjust-form" class="settings-form compact-form">
+                <label for="admin-adjust-player">Spelare</label>
+                <select id="admin-adjust-player"></select>
+                <label for="admin-cash-delta">Pengajustering</label>
+                <input id="admin-cash-delta" type="number" value="0" step="100">
+                <label for="admin-position">Position</label>
+                <input id="admin-position" type="number" min="0" max="39" placeholder="0-39">
+                <div class="settings-actions">
+                  <button type="submit">Justera</button>
+                  <span id="admin-tools-status">-</span>
+                </div>
+              </form>
+            </section>
+
+            <section class="control-panel">
+              <h2>LLM-profil</h2>
+              <form id="settings-form" class="settings-form">
+                <label for="model-select">Modell</label>
+                <select id="model-select" name="model">
+                  <option value="supergemma">supergemma</option>
+                  <option value="llama-local">llama-local</option>
+                  <option value="mistral-local">mistral-local</option>
+                  <option value="custom">custom</option>
+                </select>
+
+                <label for="preprompt-input">Preprompt</label>
+                <textarea id="preprompt-input" name="preprompt" rows="14"></textarea>
+
+                <div class="settings-actions">
+                  <button id="save-settings-button" type="submit">Spara settings</button>
+                  <span id="settings-status">Laddar settings...</span>
+                </div>
+              </form>
+            </section>
+
+            <section class="control-panel">
+              <h2>Bankläge</h2>
+              <div id="admin-bank-chat" class="bank-chat"></div>
+              <form id="admin-bank-form" class="bank-chat-form">
+                <input id="admin-bank-input" maxlength="280" placeholder="Skriv som banken/spelledaren..." autocomplete="off">
+                <button type="submit">Svara</button>
+              </form>
+            </section>
+
+            <section class="control-panel">
+              <h2>TOML</h2>
+              <p>Runtime-settings sparas i <strong id="settings-path">data/settings.toml</strong>.</p>
+            </section>
+          </section>
+        </div>
+      </div>
     </main>
   </body>
 </html>

@@ -3,7 +3,12 @@
   const state = await fetchState();
 
   if (view === "tv") renderTv(state);
-  if (view === "mobile") renderMobile(state);
+  if (view === "mobile") {
+    bindMobileSwipe();
+    renderMobile(state);
+    renderAdmin(state);
+    await renderSettings();
+  }
   if (view === "admin") {
     renderAdmin(state);
     await renderSettings();
@@ -14,7 +19,10 @@
       const freshState = await fetchState();
       if (view === "tv") renderTv(freshState);
       if (view === "admin") renderAdmin(freshState);
-      if (view === "mobile") renderMobile(freshState);
+      if (view === "mobile") {
+        renderMobile(freshState);
+        renderAdmin(freshState);
+      }
     }, 1200);
   }
 })();
@@ -268,6 +276,49 @@ function bindMobileBankChat(state) {
       input.focus();
     }
   };
+}
+
+function bindMobileSwipe() {
+  const swipe = document.getElementById("mobile-swipe");
+  const pages = swipe?.querySelector(".mobile-pages");
+  const tabs = Array.from(document.querySelectorAll("[data-mobile-tab]"));
+  const title = document.getElementById("mobile-view-title");
+  if (!swipe || !pages || tabs.length === 0 || swipe.dataset.bound === "true") return;
+  swipe.dataset.bound = "true";
+  let active = localStorage.getItem("eutherpal.mobilePane") === "admin" ? "admin" : "player";
+  let startX = 0;
+  let startY = 0;
+
+  const apply = (next) => {
+    active = next === "admin" ? "admin" : "player";
+    localStorage.setItem("eutherpal.mobilePane", active);
+    pages.style.transform = active === "admin" ? "translateX(-50%)" : "translateX(0)";
+    if (title) title.textContent = active === "admin" ? "Admin" : "Spelarpanel";
+    tabs.forEach((tab) => {
+      const selected = tab.dataset.mobileTab === active;
+      tab.classList.toggle("active", selected);
+      tab.setAttribute("aria-selected", selected ? "true" : "false");
+    });
+  };
+
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => apply(tab.dataset.mobileTab));
+  });
+  swipe.addEventListener("touchstart", (event) => {
+    if (event.touches.length !== 1) return;
+    startX = event.touches[0].clientX;
+    startY = event.touches[0].clientY;
+  }, { passive: true });
+  swipe.addEventListener("touchend", (event) => {
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+    const dx = touch.clientX - startX;
+    const dy = touch.clientY - startY;
+    if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.35) return;
+    apply(dx < 0 ? "admin" : "player");
+  }, { passive: true });
+
+  apply(active);
 }
 
 function bindAdminBankChat() {

@@ -23,6 +23,22 @@ For LAN-test:
 EUTHERPAL_BIND=0.0.0.0:8793 cargo run --manifest-path server/Cargo.toml
 ```
 
+## Android APK
+
+TV-wrappern oppnar `/tv` i fullscreen WebView:
+
+```sh
+android-tv/build-apk.sh
+```
+
+Mobil-wrappern oppnar `/mobile` och har swipe mellan spelarlage och admin:
+
+```sh
+android-mobile/build-apk.sh
+```
+
+Byggena hamnar i `android-tv/dist/eutherpal-tv.apk` och `android-mobile/dist/eutherpal-mobile.apk`. Keystore, build-mappar och APK-filer ar git-ignorerade.
+
 ## Secrets
 
 Riktiga losenord, passfraser, SSH-nycklar, sessionsnycklar och tunneluppgifter ska inte commitas. Example-config innehaller bara dummy-varden.

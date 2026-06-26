@@ -622,6 +622,48 @@ body[data-view="mobile"] #mobile-events {
   font-size: 2.2rem;
 }
 
+.mobile-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.mobile-tabs button {
+  min-height: 42px;
+  background: #fffdf8;
+}
+
+.mobile-tabs button.active {
+  background: #f8c14a;
+}
+
+.mobile-swipe {
+  width: 100%;
+  overflow: hidden;
+  touch-action: pan-y;
+}
+
+.mobile-pages {
+  display: grid;
+  grid-template-columns: 50% 50%;
+  width: 200%;
+  transition: transform 180ms ease;
+}
+
+.mobile-page {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding-right: 1px;
+}
+
+.mobile-admin-page {
+  padding-left: 10px;
+}
+
 .control-panel label + .join-row {
   margin-bottom: 10px;
 }

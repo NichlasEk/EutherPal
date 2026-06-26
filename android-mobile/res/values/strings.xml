@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">EutherPål Mobil</string>
+    <string name="default_server_url">http://192.168.32.186:8793/mobile</string>
+</resources>
