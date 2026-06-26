@@ -17,6 +17,10 @@ const BOARD_TOML: &str = include_str!("../../rules/board.lindesberg.toml");
 const CARDS_TOML: &str = include_str!("../../rules/cards.sv.toml");
 const SETTINGS_PATH: &str = "data/settings.toml";
 const DEFAULT_MODEL: &str = "supergemma";
+const DEFAULT_PLAYER_COUNT: usize = 4;
+const MIN_PLAYER_COUNT: usize = 2;
+const MAX_PLAYER_COUNT: usize = 5;
+const JAIL_FINE: i32 = 500;
 
 const TOKEN_CHOICES: &[(&str, &str)] = &[
     ("bil", "Bil"),
@@ -33,6 +37,8 @@ struct Player {
     position: usize,
     token: Option<String>,
     jailed: bool,
+    jail_turns: u8,
+    bankrupt: bool,
 }
 
 #[derive(Clone)]
@@ -103,6 +109,7 @@ struct GameState {
     next_community: usize,
     owners: Vec<Option<usize>>,
     buildings: Vec<u8>,
+    mortgaged: Vec<bool>,
     selection_order: Vec<usize>,
     selection_cursor: usize,
     current_player_index: usize,
@@ -192,8 +199,12 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
             }
         }
         ("POST", "/api/game/new") => {
+            let player_count = form_value(&body, "players")
+                .or_else(|| query_value(query, "players"))
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(DEFAULT_PLAYER_COUNT);
             let mut game = game.lock().expect("game state lock");
-            *game = GameState::new();
+            *game = GameState::new_with_player_count(player_count);
             json(200, &game.to_json())
         }
         ("POST", "/api/game/select-token") => {
@@ -241,6 +252,50 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .unwrap_or(usize::MAX);
             let mut game = game.lock().expect("game state lock");
             game.build_property(space_index, &player);
+            json(200, &game.to_json())
+        }
+        ("POST", "/api/game/sell-building") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
+            let space_index = form_value(&body, "spaceIndex")
+                .or_else(|| query_value(query, "spaceIndex"))
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(usize::MAX);
+            let mut game = game.lock().expect("game state lock");
+            game.sell_building(space_index, &player);
+            json(200, &game.to_json())
+        }
+        ("POST", "/api/game/mortgage") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
+            let space_index = form_value(&body, "spaceIndex")
+                .or_else(|| query_value(query, "spaceIndex"))
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(usize::MAX);
+            let mut game = game.lock().expect("game state lock");
+            game.mortgage_property(space_index, &player);
+            json(200, &game.to_json())
+        }
+        ("POST", "/api/game/unmortgage") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
+            let space_index = form_value(&body, "spaceIndex")
+                .or_else(|| query_value(query, "spaceIndex"))
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(usize::MAX);
+            let mut game = game.lock().expect("game state lock");
+            game.unmortgage_property(space_index, &player);
+            json(200, &game.to_json())
+        }
+        ("POST", "/api/game/pay-jail") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
+            let mut game = game.lock().expect("game state lock");
+            game.pay_jail_fine(&player);
             json(200, &game.to_json())
         }
         ("POST", "/api/game/auction/bid") => {
@@ -325,16 +380,19 @@ impl Settings {
 
 impl GameState {
     fn new() -> Self {
+        Self::new_with_player_count(DEFAULT_PLAYER_COUNT)
+    }
+
+    fn new_with_player_count(player_count: usize) -> Self {
         let spaces = parse_board_spaces(BOARD_TOML);
         let (chance_cards, community_cards) = parse_game_cards(CARDS_TOML);
         let owners = vec![None; spaces.len()];
         let buildings = vec![0; spaces.len()];
-        let players = vec![
-            Player::new("Spelare 1"),
-            Player::new("Spelare 2"),
-            Player::new("Spelare 3"),
-            Player::new("Spelare 4"),
-        ];
+        let mortgaged = vec![false; spaces.len()];
+        let player_count = player_count.clamp(MIN_PLAYER_COUNT, MAX_PLAYER_COUNT);
+        let players = (1..=player_count)
+            .map(|number| Player::new(&format!("Spelare {number}")))
+            .collect::<Vec<_>>();
         let first = random_index(players.len());
         let mut selection_order = Vec::new();
         for offset in 0..players.len() {
@@ -353,6 +411,7 @@ impl GameState {
             next_community: 0,
             owners,
             buildings,
+            mortgaged,
             selection_order,
             selection_cursor: 0,
             current_player_index: first,
@@ -451,6 +510,40 @@ impl GameState {
 
         self.dice = [random_die(), random_die()];
         self.drawn_card = None;
+        if self.players[self.current_player_index].jailed {
+            let player_name = self.players[self.current_player_index].name.clone();
+            if self.dice[0] == self.dice[1] {
+                self.players[self.current_player_index].jailed = false;
+                self.players[self.current_player_index].jail_turns = 0;
+                self.push_event(format!("{player_name} slog dubbel och lämnar fängelset."));
+                self.bank_message = format!(
+                    "{player_name} slog {} + {} och lämnar fängelset.",
+                    self.dice[0], self.dice[1]
+                );
+            } else {
+                self.players[self.current_player_index].jail_turns += 1;
+                if self.players[self.current_player_index].jail_turns >= 3 {
+                    self.players[self.current_player_index].cash -= JAIL_FINE;
+                    self.players[self.current_player_index].jailed = false;
+                    self.players[self.current_player_index].jail_turns = 0;
+                    self.bank_message = format!(
+                        "{player_name} slog inte dubbel tredje gången och betalar {JAIL_FINE} kr för att lämna fängelset."
+                    );
+                    self.push_event(format!(
+                        "{player_name} betalade {JAIL_FINE} kr efter tre misslyckade fängelsekast."
+                    ));
+                    self.resolve_negative_cash(self.current_player_index);
+                } else {
+                    self.bank_message = format!(
+                        "{player_name} slog {} + {} i fängelset. Ingen dubbel, turen går vidare.",
+                        self.dice[0], self.dice[1]
+                    );
+                    self.push_event(format!("{player_name} blev kvar i fängelset."));
+                    self.advance_to_next_active_player();
+                    return;
+                }
+            }
+        }
         let steps = (self.dice[0] + self.dice[1]) as usize;
         let player = &mut self.players[self.current_player_index];
         let old_position = player.position;
@@ -495,6 +588,7 @@ impl GameState {
                         "{payer_name} betalade {} kr i hyra till {owner_name}.",
                         rent
                     ));
+                    self.resolve_negative_cash(self.current_player_index);
                     self.bank_message.push_str(&format!(
                         " {} äger rutan. {payer_name} betalar {} kr i hyra till {owner_name}.",
                         owner_name, rent
@@ -515,10 +609,12 @@ impl GameState {
                 "{player_name} betalade {} kr i {}.",
                 amount, landed.name
             ));
+            self.resolve_negative_cash(self.current_player_index);
         } else if landed.kind == "go_to_jail" {
             let target = landed.target.unwrap_or(10);
             self.players[self.current_player_index].position = target;
             self.players[self.current_player_index].jailed = true;
+            self.players[self.current_player_index].jail_turns = 0;
             let target_name = self
                 .spaces
                 .get(target)
@@ -537,7 +633,7 @@ impl GameState {
         }
 
         if force_end_turn {
-            self.current_player_index = (self.current_player_index + 1) % self.players.len();
+            self.advance_to_next_active_player();
         } else {
             self.finish_turn_after_roll();
         }
@@ -570,6 +666,7 @@ impl GameState {
 
         self.players[offer.player_index].cash -= price;
         self.owners[offer.space_index] = Some(offer.player_index);
+        self.resolve_negative_cash(offer.player_index);
         self.bank_message = format!(
             "{} köper {} för {} kr.",
             self.players[offer.player_index].name, space.name, price
@@ -655,6 +752,7 @@ impl GameState {
         if let Some(winner) = auction.highest_bidder {
             self.players[winner].cash -= auction.highest_bid;
             self.owners[auction.space_index] = Some(winner);
+            self.resolve_negative_cash(winner);
             self.bank_message = format!(
                 "{} vinner auktionen på {} för {} kr.",
                 self.players[winner].name, space.name, auction.highest_bid
@@ -700,6 +798,7 @@ impl GameState {
             let space_name = self.spaces[space_index].name.clone();
             self.players[player_index].cash -= cost;
             self.buildings[space_index] = level;
+            self.resolve_negative_cash(player_index);
             let label = building_label(level);
             self.bank_message =
                 format!("{player_name} bygger {label} på {space_name} för {cost} kr.");
@@ -710,6 +809,106 @@ impl GameState {
         };
 
         self.bank_message = error;
+    }
+
+    fn sell_building(&mut self, space_index: usize, player_name: &str) {
+        if !self.is_authorized_current_player(player_name) {
+            return;
+        }
+        if space_index >= self.spaces.len()
+            || self.owners[space_index] != Some(self.current_player_index)
+        {
+            self.bank_message = "Välj en egen gata med byggnad att sälja.".to_string();
+            return;
+        }
+        if self.buildings[space_index] == 0 {
+            self.bank_message = "Det finns ingen byggnad att sälja på den gatan.".to_string();
+            return;
+        }
+        let value = self.spaces[space_index].build_cost.unwrap_or(0) / 2;
+        self.buildings[space_index] -= 1;
+        self.players[self.current_player_index].cash += value;
+        let player_name = self.players[self.current_player_index].name.clone();
+        let space_name = self.spaces[space_index].name.clone();
+        self.bank_message =
+            format!("{player_name} säljer en byggnadsnivå på {space_name} för {value} kr.");
+        self.push_event(format!("{player_name} sålde byggnad på {space_name}."));
+    }
+
+    fn mortgage_property(&mut self, space_index: usize, player_name: &str) {
+        if !self.is_authorized_current_player(player_name) {
+            return;
+        }
+        if space_index >= self.spaces.len()
+            || self.owners[space_index] != Some(self.current_player_index)
+        {
+            self.bank_message = "Välj en egen fastighet att inteckna.".to_string();
+            return;
+        }
+        if self.mortgaged[space_index] {
+            self.bank_message = "Fastigheten är redan intecknad.".to_string();
+            return;
+        }
+        if self.has_buildings_in_group(space_index) {
+            self.bank_message = "Sälj byggnader i färggruppen innan du intecknar.".to_string();
+            return;
+        }
+        let value = self.mortgage_value(space_index);
+        self.mortgaged[space_index] = true;
+        self.players[self.current_player_index].cash += value;
+        let player_name = self.players[self.current_player_index].name.clone();
+        let space_name = self.spaces[space_index].name.clone();
+        self.bank_message = format!("{player_name} intecknar {space_name} och får {value} kr.");
+        self.push_event(format!("{player_name} intecknade {space_name}."));
+    }
+
+    fn unmortgage_property(&mut self, space_index: usize, player_name: &str) {
+        if !self.is_authorized_current_player(player_name) {
+            return;
+        }
+        if space_index >= self.spaces.len()
+            || self.owners[space_index] != Some(self.current_player_index)
+        {
+            self.bank_message = "Välj en egen intecknad fastighet att lösa.".to_string();
+            return;
+        }
+        if !self.mortgaged[space_index] {
+            self.bank_message = "Fastigheten är inte intecknad.".to_string();
+            return;
+        }
+        let cost = self.unmortgage_cost(space_index);
+        if self.players[self.current_player_index].cash < cost {
+            self.bank_message = format!("Det kostar {cost} kr att lösa inteckningen.");
+            return;
+        }
+        self.players[self.current_player_index].cash -= cost;
+        self.mortgaged[space_index] = false;
+        let player_name = self.players[self.current_player_index].name.clone();
+        let space_name = self.spaces[space_index].name.clone();
+        self.bank_message =
+            format!("{player_name} löser inteckningen på {space_name} för {cost} kr.");
+        self.push_event(format!("{player_name} löste inteckningen på {space_name}."));
+    }
+
+    fn pay_jail_fine(&mut self, player_name: &str) {
+        if !self.is_authorized_current_player(player_name) {
+            return;
+        }
+        if !self.players[self.current_player_index].jailed {
+            self.bank_message = "Du sitter inte i fängelse.".to_string();
+            return;
+        }
+        if self.players[self.current_player_index].cash < JAIL_FINE {
+            self.bank_message =
+                format!("Du behöver {JAIL_FINE} kr för att betala dig ur fängelset.");
+            return;
+        }
+        self.players[self.current_player_index].cash -= JAIL_FINE;
+        self.players[self.current_player_index].jailed = false;
+        self.players[self.current_player_index].jail_turns = 0;
+        let player_name = self.players[self.current_player_index].name.clone();
+        self.bank_message = format!("{player_name} betalar {JAIL_FINE} kr och lämnar fängelset.");
+        self.push_event(format!("{player_name} betalade sig ur fängelset."));
     }
 
     fn is_authorized_current_player(&mut self, player_name: &str) -> bool {
@@ -751,6 +950,9 @@ impl GameState {
                 color_group_label(color)
             ));
         }
+        if group.iter().any(|index| self.mortgaged[*index]) {
+            return Some("Lös alla inteckningar i färggruppen innan du bygger.".to_string());
+        }
         let level = self.buildings[space_index];
         if level >= 5 {
             return Some(format!("{} har redan hotell.", space.name));
@@ -785,7 +987,47 @@ impl GameState {
     }
 
     fn rent_for_space(&self, space_index: usize) -> i32 {
+        if self.mortgaged[space_index] {
+            return 0;
+        }
         let space = &self.spaces[space_index];
+        if space.kind == "station" {
+            let Some(owner) = self.owners[space_index] else {
+                return space.rent.unwrap_or(0);
+            };
+            let count = self
+                .spaces
+                .iter()
+                .filter(|space| {
+                    space.kind == "station"
+                        && self.owners[space.index] == Some(owner)
+                        && !self.mortgaged[space.index]
+                })
+                .count();
+            return match count {
+                0 => 0,
+                1 => 250,
+                2 => 500,
+                3 => 1000,
+                _ => 2000,
+            };
+        }
+        if space.kind == "utility" {
+            let Some(owner) = self.owners[space_index] else {
+                return space.rent.unwrap_or(0);
+            };
+            let count = self
+                .spaces
+                .iter()
+                .filter(|space| {
+                    space.kind == "utility"
+                        && self.owners[space.index] == Some(owner)
+                        && !self.mortgaged[space.index]
+                })
+                .count();
+            let dice_total = (self.dice[0] + self.dice[1]).max(1) as i32;
+            return dice_total * if count >= 2 { 100 } else { 40 };
+        }
         let level = self.buildings[space_index] as usize;
         if level > 0 {
             return space
@@ -795,6 +1037,106 @@ impl GameState {
                 .unwrap_or_else(|| space.rent.unwrap_or(0));
         }
         space.rent.unwrap_or(0)
+    }
+
+    fn mortgage_value(&self, space_index: usize) -> i32 {
+        self.spaces[space_index].price.unwrap_or(0) / 2
+    }
+
+    fn unmortgage_cost(&self, space_index: usize) -> i32 {
+        let value = self.mortgage_value(space_index);
+        value + value / 10
+    }
+
+    fn has_buildings_in_group(&self, space_index: usize) -> bool {
+        let space = &self.spaces[space_index];
+        if space.kind != "property" {
+            return false;
+        }
+        let Some(color) = space.color.as_deref() else {
+            return false;
+        };
+        self.color_group_indices(color)
+            .iter()
+            .any(|index| self.buildings[*index] > 0)
+    }
+
+    fn liquidation_value(&self, player_index: usize) -> i32 {
+        self.spaces
+            .iter()
+            .filter(|space| self.owners[space.index] == Some(player_index))
+            .map(|space| {
+                let mortgage = if self.mortgaged[space.index] {
+                    0
+                } else {
+                    self.mortgage_value(space.index)
+                };
+                let building = (self.buildings[space.index] as i32)
+                    * self.spaces[space.index].build_cost.unwrap_or(0)
+                    / 2;
+                mortgage + building
+            })
+            .sum()
+    }
+
+    fn resolve_negative_cash(&mut self, player_index: usize) {
+        if self.players[player_index].cash >= 0 || self.players[player_index].bankrupt {
+            return;
+        }
+        let debt = -self.players[player_index].cash;
+        if self.liquidation_value(player_index) >= debt {
+            let name = self.players[player_index].name.clone();
+            self.bank_message.push_str(&format!(
+                " {name} ligger {debt} kr back och måste sälja byggnader eller inteckna fastigheter."
+            ));
+            self.push_event(format!("{name} ligger {debt} kr back."));
+            return;
+        }
+        self.declare_bankruptcy(player_index);
+    }
+
+    fn declare_bankruptcy(&mut self, player_index: usize) {
+        let name = self.players[player_index].name.clone();
+        self.players[player_index].bankrupt = true;
+        self.players[player_index].token = None;
+        self.players[player_index].jailed = false;
+        self.players[player_index].cash = 0;
+        for index in 0..self.spaces.len() {
+            if self.owners[index] == Some(player_index) {
+                self.owners[index] = None;
+                self.buildings[index] = 0;
+                self.mortgaged[index] = false;
+            }
+        }
+        self.pending_offer = None;
+        self.push_event(format!(
+            "{name} gick i konkurs. Fastigheterna återgår till banken."
+        ));
+        self.bank_message = format!("{name} är i konkurs och är ute ur spelet.");
+        if self.current_player_index == player_index {
+            self.advance_to_next_active_player();
+        }
+    }
+
+    fn advance_to_next_active_player(&mut self) {
+        if self
+            .players
+            .iter()
+            .filter(|player| !player.bankrupt)
+            .count()
+            <= 1
+        {
+            if let Some(winner) = self.players.iter().find(|player| !player.bankrupt) {
+                self.bank_message = format!("{} vinner spelet!", winner.name);
+            }
+            return;
+        }
+        for _ in 0..self.players.len() {
+            self.current_player_index = (self.current_player_index + 1) % self.players.len();
+            if !self.players[self.current_player_index].bankrupt {
+                return;
+            }
+        }
     }
 
     fn draw_and_apply_card(&mut self, deck: &str, player_name: &str) -> bool {
@@ -855,6 +1197,7 @@ impl GameState {
                     "{} betalade {} kr.",
                     self.players[player_index].name, amount
                 ));
+                self.resolve_negative_cash(player_index);
                 false
             }
             "move_to" => {
@@ -879,6 +1222,7 @@ impl GameState {
                 let target = card.target.unwrap_or(10);
                 self.players[player_index].position = target;
                 self.players[player_index].jailed = true;
+                self.players[player_index].jail_turns = 0;
                 let target_name = self
                     .spaces
                     .get(target)
@@ -899,7 +1243,7 @@ impl GameState {
             self.bank_message
                 .push_str(" Dubbel, samma spelare slår igen.");
         } else {
-            self.current_player_index = (self.current_player_index + 1) % self.players.len();
+            self.advance_to_next_active_player();
         }
     }
 
@@ -1081,12 +1425,14 @@ impl GameState {
             .iter()
             .map(|player| {
                 format!(
-                    "{{\"name\":\"{}\",\"cash\":{},\"position\":{},\"token\":{},\"jailed\":{}}}",
+                    "{{\"name\":\"{}\",\"cash\":{},\"position\":{},\"token\":{},\"jailed\":{},\"jailTurns\":{},\"bankrupt\":{}}}",
                     escape_json(&player.name),
                     player.cash,
                     player.position,
                     optional_json_string(player.token.as_deref()),
-                    player.jailed
+                    player.jailed,
+                    player.jail_turns,
+                    player.bankrupt
                 )
             })
             .collect::<Vec<_>>()
@@ -1105,7 +1451,7 @@ impl GameState {
                     .collect::<Vec<_>>()
                     .join(",");
                 format!(
-                    "{{\"index\":{},\"kind\":\"{}\",\"name\":\"{}\",\"color\":{},\"price\":{},\"rent\":{},\"currentRent\":{},\"buildCost\":{},\"buildings\":{},\"rentTiers\":[{}],\"amount\":{},\"target\":{},\"owner\":{},\"cardTitle\":{},\"cardText\":{},\"cardIcon\":{}}}",
+                    "{{\"index\":{},\"kind\":\"{}\",\"name\":\"{}\",\"color\":{},\"price\":{},\"rent\":{},\"currentRent\":{},\"buildCost\":{},\"buildings\":{},\"mortgaged\":{},\"mortgageValue\":{},\"unmortgageCost\":{},\"rentTiers\":[{}],\"amount\":{},\"target\":{},\"owner\":{},\"cardTitle\":{},\"cardText\":{},\"cardIcon\":{}}}",
                     space.index,
                     escape_json(&space.kind),
                     escape_json(&space.name),
@@ -1115,6 +1461,9 @@ impl GameState {
                     self.rent_for_space(space.index),
                     optional_json_number(space.build_cost),
                     self.buildings[space.index],
+                    self.mortgaged[space.index],
+                    self.mortgage_value(space.index),
+                    self.unmortgage_cost(space.index),
                     rent_tiers,
                     optional_json_number(space.amount),
                     optional_json_usize(space.target),
@@ -1163,7 +1512,7 @@ impl GameState {
             .join(",");
 
         format!(
-            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}],\"bankChat\":[{}]}}",
+            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"assetActions\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}],\"bankChat\":[{}]}}",
             escape_json(&self.room_code),
             self.phase.as_str(),
             escape_json(current),
@@ -1174,6 +1523,7 @@ impl GameState {
             self.auction_json(),
             self.drawn_card_json(),
             self.buildable_properties_json(),
+            self.asset_actions_json(),
             players,
             token_choices,
             spaces,
@@ -1260,6 +1610,38 @@ impl GameState {
             .join(",")
     }
 
+    fn asset_actions_json(&self) -> String {
+        if self.phase == Phase::TokenSelection || self.auction.is_some() {
+            return String::new();
+        }
+        let player_index = self.current_player_index;
+        self.spaces
+            .iter()
+            .filter(|space| self.owners[space.index] == Some(player_index))
+            .map(|space| {
+                let can_mortgage = !self.mortgaged[space.index] && !self.has_buildings_in_group(space.index);
+                let can_unmortgage = self.mortgaged[space.index]
+                    && self.players[player_index].cash >= self.unmortgage_cost(space.index);
+                let can_sell_building = self.buildings[space.index] > 0;
+                format!(
+                    "{{\"spaceIndex\":{},\"spaceName\":\"{}\",\"kind\":\"{}\",\"buildings\":{},\"mortgaged\":{},\"mortgageValue\":{},\"unmortgageCost\":{},\"sellValue\":{},\"canMortgage\":{},\"canUnmortgage\":{},\"canSellBuilding\":{}}}",
+                    space.index,
+                    escape_json(&space.name),
+                    escape_json(&space.kind),
+                    self.buildings[space.index],
+                    self.mortgaged[space.index],
+                    self.mortgage_value(space.index),
+                    self.unmortgage_cost(space.index),
+                    space.build_cost.unwrap_or(0) / 2,
+                    can_mortgage,
+                    can_unmortgage,
+                    can_sell_building
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
     fn drawn_card_json(&self) -> String {
         let Some(card) = &self.drawn_card else {
             return "null".to_string();
@@ -1301,6 +1683,8 @@ impl Player {
             position: 0,
             token: None,
             jailed: false,
+            jail_turns: 0,
+            bankrupt: false,
         }
     }
 }
@@ -1802,5 +2186,49 @@ mod tests {
                 .any(|message| message.from_bank && message.text.contains("Gå"))
         );
         assert!(game.bank_message.contains("Banken till Maja"));
+    }
+
+    #[test]
+    fn mortgage_blocks_rent_and_unmortgage_costs_interest() {
+        let mut game = playable_game();
+        game.owners[1] = Some(0);
+        let cash_before = game.players[0].cash;
+
+        game.mortgage_property(1, "");
+
+        assert!(game.mortgaged[1]);
+        assert_eq!(game.players[0].cash, cash_before + 300);
+        assert_eq!(game.rent_for_space(1), 0);
+
+        game.unmortgage_property(1, "");
+        assert!(!game.mortgaged[1]);
+        assert_eq!(game.players[0].cash, cash_before + 300 - 330);
+    }
+
+    #[test]
+    fn station_and_utility_rent_scale_by_owned_group() {
+        let mut game = playable_game();
+        game.owners[5] = Some(0);
+        game.owners[15] = Some(0);
+        game.owners[12] = Some(1);
+        game.owners[27] = Some(1);
+        game.dice = [3, 4];
+
+        assert_eq!(game.rent_for_space(5), 500);
+        assert_eq!(game.rent_for_space(12), 700);
+    }
+
+    #[test]
+    fn paying_jail_fine_releases_player() {
+        let mut game = playable_game();
+        game.players[0].jailed = true;
+        game.players[0].jail_turns = 1;
+        let cash_before = game.players[0].cash;
+
+        game.pay_jail_fine("");
+
+        assert!(!game.players[0].jailed);
+        assert_eq!(game.players[0].jail_turns, 0);
+        assert_eq!(game.players[0].cash, cash_before - JAIL_FINE);
     }
 }

@@ -624,12 +624,14 @@ textarea {
 }
 
 .auction-panel:empty,
-.build-panel:empty {
+.build-panel:empty,
+.asset-panel:empty {
   display: none;
 }
 
 .auction-panel h3,
-.build-panel h3 {
+.build-panel h3,
+.asset-panel h3 {
   margin: 0;
   font-size: 1.05rem;
 }
@@ -661,6 +663,12 @@ textarea {
   margin: 10px 0;
 }
 
+.asset-panel {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
 .build-panel button {
   display: grid;
   grid-template-columns: 1fr;
@@ -668,6 +676,32 @@ textarea {
   min-height: 62px;
   padding: 8px;
   text-align: left;
+}
+
+.asset-panel p {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.asset-panel .debt {
+  color: #9f2929;
+}
+
+.asset-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 5px;
+  border: 2px solid #d2c5ad;
+  border-radius: 6px;
+  padding: 8px;
+  background: #fffdf8;
+}
+
+.asset-row span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
 }
 
 .build-panel button span,
@@ -700,7 +734,8 @@ textarea {
 }
 
 .action-grid button:disabled,
-.build-panel button:disabled {
+.build-panel button:disabled,
+.asset-panel button:disabled {
   border-color: #a8a097;
   background: #d8d2c6;
   color: #69635c;

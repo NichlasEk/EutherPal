@@ -103,7 +103,9 @@ function renderMobile(state) {
   renderEvents(document.getElementById("mobile-events"), state.events);
   renderOfferControls(state, local);
   renderAuctionControls(state, local);
+  renderJailControls(state, local);
   renderBuildControls(state, local);
+  renderAssetControls(state, local);
   renderBankChat(document.getElementById("bank-chat"), state.bankChat);
   bindMobileBankChat(state);
   document.getElementById("roll-button").onclick = async () => {
@@ -119,7 +121,8 @@ function renderMobile(state) {
     renderMobile(updated);
   };
   document.getElementById("new-game-button").onclick = async () => {
-    const updated = await postAction("/api/game/new", "");
+    const players = document.getElementById("new-game-players")?.value || "4";
+    const updated = await postAction("/api/game/new", new URLSearchParams({ players }).toString());
     renderMobile(updated);
   };
 }
@@ -164,7 +167,8 @@ async function renderSettings() {
 
 function spaceDetails(space) {
   const rent = space.currentRent || space.rent;
-  if (space.owner) return `<small>Ägs: ${space.owner}${rent ? ` · Hyra ${rent}` : ""}</small>`;
+  const mortgage = space.mortgaged ? " · Intecknad" : "";
+  if (space.owner) return `<small>Ägs: ${space.owner}${rent ? ` · Hyra ${rent}` : ""}${mortgage}</small>`;
   if (space.price) return `<small>${space.price} kr${rent ? ` · Hyra ${rent}` : ""}</small>`;
   return "";
 }
@@ -194,6 +198,7 @@ function renderPropertyCard(container, space) {
   const meta = [
     space.price ? `Pris ${space.price} kr` : "",
     space.currentRent ? `Hyra ${space.currentRent} kr` : space.rent ? `Hyra ${space.rent} kr` : "",
+    space.mortgaged ? "Intecknad ja" : "",
     space.buildCost ? `Bygg ${space.buildCost} kr` : "",
     space.buildings ? `Nivå ${buildingLabel(space.buildings)}` : "",
     space.amount ? `Belopp ${space.amount} kr` : "",
@@ -274,7 +279,7 @@ function cardIcon(icon) {
 
 function tokensAt(players, position) {
   return players
-    .filter((player) => player.position === position && player.token)
+    .filter((player) => player.position === position && player.token && !player.bankrupt)
     .map((player) => tokenAvatar(player, "mini"))
     .join("");
 }
@@ -290,6 +295,8 @@ function renderOfferControls(state, localPlayer) {
   buyButton.disabled = !offerForLocal;
   declineButton.disabled = !offerForLocal;
   rollButton.disabled = !isLocalTurn || Boolean(offer) || Boolean(state.auction) || state.phase === "token_selection";
+  if (localPlayer?.jailed) rollButton.textContent = "Slå för dubbel";
+  else rollButton.textContent = "Kasta tärning";
 
   if (offer) {
     buyButton.textContent = `Köp ${offer.spaceName}`;
@@ -333,6 +340,24 @@ function renderAuctionControls(state, localPlayer) {
   };
 }
 
+function renderJailControls(state, localPlayer) {
+  const panel = document.getElementById("jail-panel");
+  if (!panel) return;
+  const isLocalTurn = localPlayer?.name === state.currentPlayer;
+  if (!localPlayer?.jailed) {
+    panel.innerHTML = "";
+    return;
+  }
+  panel.innerHTML = `<h3>Fängelse</h3><p>Försök ${localPlayer.jailTurns || 0}/3. Slå dubbel eller betala 500 kr.</p><button id="pay-jail-button" type="button" ${isLocalTurn && localPlayer.cash >= 500 ? "" : "disabled"}>Betala 500 kr</button>`;
+  const button = document.getElementById("pay-jail-button");
+  if (button) {
+    button.onclick = async () => {
+      const updated = await postAction("/api/game/pay-jail", playerBody());
+      renderMobile(updated);
+    };
+  }
+}
+
 function renderBuildControls(state, localPlayer) {
   const panel = document.getElementById("build-panel");
   const buildButton = document.getElementById("build-button");
@@ -372,6 +397,27 @@ function renderBuildControls(state, localPlayer) {
     : null;
 }
 
+function renderAssetControls(state, localPlayer) {
+  const panel = document.getElementById("asset-panel");
+  if (!panel) return;
+  const isLocalTurn = localPlayer?.name === state.currentPlayer;
+  const actions = state.assetActions || [];
+  if (!localPlayer || !isLocalTurn || actions.length === 0) {
+    panel.innerHTML = "";
+    return;
+  }
+  panel.innerHTML = `<h3>Ekonomi</h3>${localPlayer.cash < 0 ? `<p class="debt">Du ligger ${Math.abs(localPlayer.cash)} kr back. Sälj eller inteckna.</p>` : ""}${actions
+    .map((action) => `<div class="asset-row"><strong>${escapeHtml(action.spaceName)}</strong><span>${action.mortgaged ? "Intecknad" : action.buildings ? buildingLabel(action.buildings) : "Fri"}</span><button type="button" data-action="mortgage" data-space="${action.spaceIndex}" ${isLocalTurn && action.canMortgage ? "" : "disabled"}>Inteckna +${action.mortgageValue}</button><button type="button" data-action="unmortgage" data-space="${action.spaceIndex}" ${isLocalTurn && action.canUnmortgage ? "" : "disabled"}>Lös ${action.unmortgageCost}</button><button type="button" data-action="sell-building" data-space="${action.spaceIndex}" ${isLocalTurn && action.canSellBuilding ? "" : "disabled"}>Sälj byggnad +${action.sellValue}</button></div>`)
+    .join("")}`;
+  panel.querySelectorAll("button[data-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const body = new URLSearchParams({ player: localPlayerName(), spaceIndex: button.dataset.space });
+      const updated = await postAction(`/api/game/${button.dataset.action}`, body.toString());
+      renderMobile(updated);
+    });
+  });
+}
+
 function renderTokenButtons(state) {
   const panel = document.getElementById("token-buttons");
   const name = localPlayerName();
@@ -404,7 +450,7 @@ function renderPlayerSummary(state, localPlayer) {
     return;
   }
   const space = state.spaces[localPlayer.position];
-  summary.innerHTML = `${tokenAvatar(localPlayer, "large")}<div><strong>${escapeHtml(localPlayer.name)}</strong><span>${tokenLabel(localPlayer.token) || "Ingen pjäs"} · ${space?.name || "Okänd ruta"} · ${localPlayer.cash} kr${localPlayer.jailed ? " · Fängslad" : ""}</span></div>`;
+  summary.innerHTML = `${tokenAvatar(localPlayer, "large")}<div><strong>${escapeHtml(localPlayer.name)}</strong><span>${tokenLabel(localPlayer.token) || "Ingen pjäs"} · ${space?.name || "Okänd ruta"} · ${localPlayer.cash} kr${localPlayer.jailed ? " · Fängslad" : ""}${localPlayer.bankrupt ? " · Konkurs" : ""}</span></div>`;
 }
 
 function buildingMarkers(space) {
