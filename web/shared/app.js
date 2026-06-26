@@ -69,6 +69,9 @@ function renderTv(state) {
       .map((token) => `<span class="${token.available ? "available" : "taken"}">${token.label}</span>`)
       .join("");
   }
+
+  renderPropertyCard(document.getElementById("tv-card"), selectedSpace(state));
+  renderEvents(document.getElementById("tv-events"), state.events);
 }
 
 function renderMobile(state) {
@@ -85,6 +88,8 @@ function renderMobile(state) {
   });
 
   renderTokenButtons(state);
+  renderPropertyCard(document.getElementById("mobile-card"), selectedSpace(state));
+  renderEvents(document.getElementById("mobile-events"), state.events);
   renderOfferControls(state);
   renderAuctionControls(state);
   document.getElementById("roll-button").onclick = async () => {
@@ -145,6 +150,52 @@ function spaceDetails(space) {
   if (space.owner) return `<small>Ägs: ${space.owner}</small>`;
   if (space.price) return `<small>${space.price} kr</small>`;
   return "";
+}
+
+function selectedSpace(state) {
+  if (state.pendingOffer) return state.spaces[state.pendingOffer.spaceIndex];
+  if (state.auction) return state.spaces[state.auction.spaceIndex];
+  const current = state.players.find((player) => player.name === state.currentPlayer) || state.players[0];
+  return state.spaces[current?.position || 0];
+}
+
+function renderPropertyCard(container, space) {
+  if (!container || !space) return;
+  const title = space.cardTitle || space.name;
+  const icon = space.cardIcon || space.kind;
+  const meta = [
+    space.price ? `Pris ${space.price} kr` : "",
+    space.rent ? `Hyra ${space.rent} kr` : "",
+    space.owner ? `Ägare ${space.owner}` : "",
+  ].filter(Boolean);
+  container.className = `property-card card-${space.color || space.kind}`;
+  container.innerHTML = `<div class="card-band"><span>${cardIcon(icon)}</span></div><strong>${title}</strong><p>${space.cardText || "Specialruta."}</p><dl>${meta.map((item) => `<div><dt>${item.split(" ")[0]}</dt><dd>${item.split(" ").slice(1).join(" ")}</dd></div>`).join("")}</dl>`;
+}
+
+function renderEvents(container, events) {
+  if (!container) return;
+  container.innerHTML = (events || [])
+    .slice()
+    .reverse()
+    .map((event) => `<li>${event}</li>`)
+    .join("");
+}
+
+function cardIcon(icon) {
+  return {
+    brown: "BR",
+    light_blue: "LB",
+    pink: "PK",
+    orange: "OR",
+    red: "RD",
+    yellow: "YL",
+    green: "GR",
+    blue: "BL",
+    station: "ST",
+    bolt: "EL",
+    water: "VA",
+    utility: "VE",
+  }[icon] || "EP";
 }
 
 function tokensAt(players, position) {

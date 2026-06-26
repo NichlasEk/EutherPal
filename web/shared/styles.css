@@ -83,7 +83,8 @@ textarea {
   display: grid;
   grid-template-columns: minmax(560px, 1fr) 320px;
   gap: 16px;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   padding: 18px;
 }
 
@@ -266,6 +267,8 @@ textarea {
 }
 
 .side-panel {
+  max-height: calc(100vh - 36px);
+  overflow: auto;
   padding: 2px 0;
 }
 
@@ -278,7 +281,7 @@ textarea {
 }
 
 .side-panel .panel-block {
-  padding: 12px 16px;
+  padding: 10px 14px;
 }
 
 .panel-block h2,
@@ -317,6 +320,102 @@ textarea {
   grid-column: 1 / -1;
   color: var(--muted);
   font-style: normal;
+}
+
+.property-card {
+  display: grid;
+  gap: 6px;
+  overflow: hidden;
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  background: #fffdf8;
+}
+
+.property-card:empty {
+  display: none;
+}
+
+.card-band {
+  display: grid;
+  place-items: center;
+  min-height: 34px;
+  background: #d8d2c6;
+  border-bottom: 2px solid var(--line);
+}
+
+.card-band span {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  aspect-ratio: 1;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.property-card strong,
+.property-card p,
+.property-card dl {
+  margin: 0 12px;
+}
+
+.property-card strong {
+  font-size: 1.05rem;
+}
+
+.property-card p {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.25;
+}
+
+.property-card dl {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.property-card dl div {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+}
+
+.property-card dt {
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.property-card dd {
+  margin: 0;
+  font-weight: 900;
+}
+
+.card-brown .card-band { background: #7a4d2d; }
+.card-light_blue .card-band { background: #8cc4df; }
+.card-pink .card-band { background: #b04786; }
+.card-orange .card-band { background: #e07a2f; }
+.card-red .card-band { background: #c23535; }
+.card-yellow .card-band { background: #e6c84e; }
+.card-green .card-band { background: #2f9d5b; }
+.card-blue .card-band { background: #244f9e; }
+.card-station .card-band { background: #d9dadd; }
+.card-utility .card-band { background: #caeee7; }
+
+.event-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.2;
+}
+
+.event-list:empty {
+  display: none;
 }
 
 .phone-shell,

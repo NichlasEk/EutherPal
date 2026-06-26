@@ -1,3 +1,4 @@
+
 [[spaces]]
 index = 0
 kind = "go"
@@ -10,6 +11,9 @@ name = "Kristinavägen"
 color = "brown"
 price = 600
 rent = 20
+card_title = "Kristinavägen"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "brown"
 
 [[spaces]]
 index = 2
@@ -23,6 +27,9 @@ name = "Kungsgatan"
 color = "brown"
 price = 600
 rent = 40
+card_title = "Kungsgatan"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "brown"
 
 [[spaces]]
 index = 4
@@ -35,6 +42,9 @@ kind = "station"
 name = "Lindesberg C"
 price = 2000
 rent = 250
+card_title = "Lindesberg C"
+card_text = "Lindesberg C knyter ihop Lindesberg med resten av brädet. Hyran växer senare med stationsgruppen."
+card_icon = "station"
 
 [[spaces]]
 index = 6
@@ -43,6 +53,9 @@ name = "Storgatan"
 color = "light_blue"
 price = 1000
 rent = 60
+card_title = "Storgatan"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "light_blue"
 
 [[spaces]]
 index = 7
@@ -56,6 +69,9 @@ name = "Rådhustorget"
 color = "light_blue"
 price = 1000
 rent = 60
+card_title = "Rådhustorget"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "light_blue"
 
 [[spaces]]
 index = 9
@@ -64,6 +80,9 @@ name = "Prästgatan"
 color = "light_blue"
 price = 1200
 rent = 80
+card_title = "Prästgatan"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "light_blue"
 
 [[spaces]]
 index = 10
@@ -77,13 +96,19 @@ name = "Köpmangatan"
 color = "pink"
 price = 1400
 rent = 100
+card_title = "Köpmangatan"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "pink"
 
 [[spaces]]
 index = 12
 kind = "utility"
-name = "Elverket"
+name = "LindeEnergi"
 price = 1500
 rent = 100
+card_title = "LindeEnergi"
+card_text = "LindeEnergi är ett verk. Hyran kommer senare räknas mot tärningsslaget."
+card_icon = "bolt"
 
 [[spaces]]
 index = 13
@@ -92,6 +117,9 @@ name = "Bergslagsvägen"
 color = "pink"
 price = 1400
 rent = 100
+card_title = "Bergslagsvägen"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "pink"
 
 [[spaces]]
 index = 14
@@ -100,6 +128,9 @@ name = "Norrtullsgatan"
 color = "pink"
 price = 1600
 rent = 120
+card_title = "Norrtullsgatan"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "pink"
 
 [[spaces]]
 index = 15
@@ -107,6 +138,9 @@ kind = "station"
 name = "Frövi station"
 price = 2000
 rent = 250
+card_title = "Frövi station"
+card_text = "Frövi station knyter ihop Lindesberg med resten av brädet. Hyran växer senare med stationsgruppen."
+card_icon = "station"
 
 [[spaces]]
 index = 16
@@ -115,6 +149,9 @@ name = "Bondegatan"
 color = "orange"
 price = 1800
 rent = 140
+card_title = "Bondegatan"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "orange"
 
 [[spaces]]
 index = 17
@@ -128,6 +165,9 @@ name = "Kyrkberget"
 color = "orange"
 price = 1800
 rent = 140
+card_title = "Kyrkberget"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "orange"
 
 [[spaces]]
 index = 19
@@ -136,6 +176,9 @@ name = "Smedjegatan"
 color = "orange"
 price = 2000
 rent = 160
+card_title = "Smedjegatan"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "orange"
 
 [[spaces]]
 index = 20
@@ -149,6 +192,9 @@ name = "Loppholmarna"
 color = "red"
 price = 2200
 rent = 180
+card_title = "Loppholmarna"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "red"
 
 [[spaces]]
 index = 22
@@ -162,6 +208,9 @@ name = "Strandpromenaden"
 color = "red"
 price = 2200
 rent = 180
+card_title = "Strandpromenaden"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "red"
 
 [[spaces]]
 index = 24
@@ -170,6 +219,9 @@ name = "Sjövägen"
 color = "red"
 price = 2400
 rent = 200
+card_title = "Sjövägen"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "red"
 
 [[spaces]]
 index = 25
@@ -177,6 +229,9 @@ kind = "station"
 name = "Storå station"
 price = 2000
 rent = 250
+card_title = "Storå station"
+card_text = "Storå station knyter ihop Lindesberg med resten av brädet. Hyran växer senare med stationsgruppen."
+card_icon = "station"
 
 [[spaces]]
 index = 26
@@ -185,6 +240,9 @@ name = "Björkhyttevägen"
 color = "yellow"
 price = 2600
 rent = 220
+card_title = "Björkhyttevägen"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "yellow"
 
 [[spaces]]
 index = 27
@@ -192,6 +250,9 @@ kind = "utility"
 name = "Vattenverket"
 price = 1500
 rent = 100
+card_title = "Vattenverket"
+card_text = "Vattenverket är ett verk. Hyran kommer senare räknas mot tärningsslaget."
+card_icon = "water"
 
 [[spaces]]
 index = 28
@@ -200,6 +261,9 @@ name = "Gusselbyvägen"
 color = "yellow"
 price = 2600
 rent = 220
+card_title = "Gusselbyvägen"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "yellow"
 
 [[spaces]]
 index = 29
@@ -208,6 +272,9 @@ name = "Löpargatan"
 color = "yellow"
 price = 2800
 rent = 240
+card_title = "Löpargatan"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "yellow"
 
 [[spaces]]
 index = 30
@@ -221,6 +288,9 @@ name = "Hagavägen"
 color = "green"
 price = 3000
 rent = 260
+card_title = "Hagavägen"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "green"
 
 [[spaces]]
 index = 32
@@ -229,6 +299,9 @@ name = "Lasarettsgatan"
 color = "green"
 price = 3000
 rent = 260
+card_title = "Lasarettsgatan"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "green"
 
 [[spaces]]
 index = 33
@@ -242,6 +315,9 @@ name = "Brotorpsvägen"
 color = "green"
 price = 3200
 rent = 280
+card_title = "Brotorpsvägen"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "green"
 
 [[spaces]]
 index = 35
@@ -249,6 +325,9 @@ kind = "station"
 name = "Fellingsbro station"
 price = 2000
 rent = 250
+card_title = "Fellingsbro station"
+card_text = "Fellingsbro station knyter ihop Lindesberg med resten av brädet. Hyran växer senare med stationsgruppen."
+card_icon = "station"
 
 [[spaces]]
 index = 36
@@ -262,6 +341,9 @@ name = "Lindesjön"
 color = "blue"
 price = 3500
 rent = 350
+card_title = "Lindesjön"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "blue"
 
 [[spaces]]
 index = 38
@@ -275,3 +357,6 @@ name = "Apothic Avenue"
 color = "blue"
 price = 4000
 rent = 500
+card_title = "Apothic Avenue"
+card_text = "En gata i Lindesberg. Köp den för att ta hyra när andra spelare landar här."
+card_icon = "blue"

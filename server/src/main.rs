@@ -41,6 +41,9 @@ struct BoardSpace {
     color: Option<String>,
     price: Option<i32>,
     rent: Option<i32>,
+    card_title: Option<String>,
+    card_text: Option<String>,
+    card_icon: Option<String>,
 }
 
 struct PendingOffer {
@@ -67,6 +70,7 @@ struct GameState {
     dice: [u8; 2],
     pending_offer: Option<PendingOffer>,
     auction: Option<AuctionState>,
+    events: Vec<String>,
     bank_message: String,
 }
 
@@ -264,6 +268,7 @@ impl GameState {
             dice: [0, 0],
             pending_offer: None,
             auction: None,
+            events: vec![format!("{first_name} börjar och väljer pjäs först.")],
             bank_message: format!(
                 "{first_name} börjar och väljer pjäs först. Välj en av de fem klassiska pjäserna."
             ),
@@ -295,6 +300,7 @@ impl GameState {
         let token_label = token_label(token);
         self.players[player_index].token = Some(token.to_string());
         self.selection_cursor += 1;
+        self.push_event(format!("{player_name} valde {token_label}."));
 
         if self.selection_cursor >= self.selection_order.len() {
             self.phase = Phase::Play;
@@ -335,13 +341,18 @@ impl GameState {
         if old_position + steps >= self.spaces.len() {
             player.cash += 2000;
         }
+        let player_name = player.name.clone();
 
         let landed_index = player.position;
         let landed = self.spaces[landed_index].clone();
         self.bank_message = format!(
             "{} slog {} + {} och går till {}.",
-            player.name, self.dice[0], self.dice[1], landed.name
+            player_name, self.dice[0], self.dice[1], landed.name
         );
+        self.push_event(format!(
+            "{} slog {} + {} och gick till {}.",
+            player_name, self.dice[0], self.dice[1], landed.name
+        ));
 
         if landed.is_buyable() {
             match self.owners[landed_index] {
@@ -353,6 +364,7 @@ impl GameState {
                     });
                     self.bank_message
                         .push_str(&format!(" Vill du köpa {} för {} kr?", landed.name, price));
+                    self.push_event(format!("{} är ledig för {} kr.", landed.name, price));
                     return;
                 }
                 Some(owner_index) if owner_index != self.current_player_index => {
@@ -361,6 +373,10 @@ impl GameState {
                     let owner_name = self.players[owner_index].name.clone();
                     self.players[self.current_player_index].cash -= rent;
                     self.players[owner_index].cash += rent;
+                    self.push_event(format!(
+                        "{payer_name} betalade {} kr i hyra till {owner_name}.",
+                        rent
+                    ));
                     self.bank_message.push_str(&format!(
                         " {} äger rutan. {payer_name} betalar {} kr i hyra till {owner_name}.",
                         owner_name, rent
@@ -403,6 +419,10 @@ impl GameState {
             "{} köper {} för {} kr.",
             self.players[offer.player_index].name, space.name, price
         );
+        self.push_event(format!(
+            "{} köpte {} för {} kr.",
+            self.players[offer.player_index].name, space.name, price
+        ));
         self.finish_turn_after_roll();
     }
 
@@ -423,6 +443,10 @@ impl GameState {
             "{} avstår från att köpa {}. Auktionen startar på 0 kr.",
             self.players[offer.player_index].name, space.name
         );
+        self.push_event(format!(
+            "{} avstod från {}. Auktion startar.",
+            self.players[offer.player_index].name, space.name
+        ));
     }
 
     fn place_auction_bid(&mut self, player_name: &str, amount: i32) {
@@ -457,6 +481,10 @@ impl GameState {
             "{} leder auktionen på {} med {} kr.",
             self.players[player_index].name, space_name, amount
         );
+        self.push_event(format!(
+            "{} bjöd {} kr på {}.",
+            self.players[player_index].name, amount, space_name
+        ));
     }
 
     fn finish_auction(&mut self) {
@@ -473,11 +501,16 @@ impl GameState {
                 "{} vinner auktionen på {} för {} kr.",
                 self.players[winner].name, space.name, auction.highest_bid
             );
+            self.push_event(format!(
+                "{} vann auktionen på {} för {} kr.",
+                self.players[winner].name, space.name, auction.highest_bid
+            ));
         } else {
             self.bank_message = format!(
                 "Ingen lade bud på {}. Rutan är fortfarande ledig.",
                 space.name
             );
+            self.push_event(format!("Auktionen på {} avslutades utan bud.", space.name));
         }
 
         self.phase = Phase::Play;
@@ -498,6 +531,13 @@ impl GameState {
             self.selection_order[self.selection_cursor]
         } else {
             self.current_player_index
+        }
+    }
+
+    fn push_event(&mut self, event: String) {
+        self.events.push(event);
+        if self.events.len() > 8 {
+            self.events.remove(0);
         }
     }
 
@@ -525,16 +565,25 @@ impl GameState {
                     .map(|owner| format!("\"{}\"", escape_json(&self.players[owner].name)))
                     .unwrap_or_else(|| "null".to_string());
                 format!(
-                    "{{\"index\":{},\"kind\":\"{}\",\"name\":\"{}\",\"color\":{},\"price\":{},\"rent\":{},\"owner\":{}}}",
+                    "{{\"index\":{},\"kind\":\"{}\",\"name\":\"{}\",\"color\":{},\"price\":{},\"rent\":{},\"owner\":{},\"cardTitle\":{},\"cardText\":{},\"cardIcon\":{}}}",
                     space.index,
                     escape_json(&space.kind),
                     escape_json(&space.name),
                     optional_json_string(space.color.as_deref()),
                     optional_json_number(space.price),
                     optional_json_number(space.rent),
-                    owner
+                    owner,
+                    optional_json_string(space.card_title.as_deref()),
+                    optional_json_string(space.card_text.as_deref()),
+                    optional_json_string(space.card_icon.as_deref())
                 )
             })
+            .collect::<Vec<_>>()
+            .join(",");
+        let events = self
+            .events
+            .iter()
+            .map(|event| format!("\"{}\"", escape_json(event)))
             .collect::<Vec<_>>()
             .join(",");
         let token_choices = TOKEN_CHOICES
@@ -555,7 +604,7 @@ impl GameState {
             .join(",");
 
         format!(
-            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"pendingOffer\":{},\"auction\":{},\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}]}}",
+            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"pendingOffer\":{},\"auction\":{},\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}]}}",
             escape_json(&self.room_code),
             self.phase.as_str(),
             escape_json(current),
@@ -566,7 +615,8 @@ impl GameState {
             self.auction_json(),
             players,
             token_choices,
-            spaces
+            spaces,
+            events
         )
     }
 
@@ -784,6 +834,9 @@ fn parse_space_block(lines: &[String]) -> BoardSpace {
     let mut color = None;
     let mut price = None;
     let mut rent = None;
+    let mut card_title = None;
+    let mut card_text = None;
+    let mut card_icon = None;
 
     for line in lines {
         let Some((key, value)) = line.split_once('=') else {
@@ -798,6 +851,9 @@ fn parse_space_block(lines: &[String]) -> BoardSpace {
             "color" => color = Some(trim_toml_quotes(value).to_string()),
             "price" => price = value.parse().ok(),
             "rent" => rent = value.parse().ok(),
+            "card_title" => card_title = Some(trim_toml_quotes(value).to_string()),
+            "card_text" => card_text = Some(trim_toml_quotes(value).to_string()),
+            "card_icon" => card_icon = Some(trim_toml_quotes(value).to_string()),
             _ => {}
         }
     }
@@ -809,6 +865,9 @@ fn parse_space_block(lines: &[String]) -> BoardSpace {
         color,
         price,
         rent,
+        card_title,
+        card_text,
+        card_icon,
     }
 }
 
