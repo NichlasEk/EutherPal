@@ -133,7 +133,7 @@ enum Phase {
 type SharedGame = Arc<Mutex<GameState>>;
 
 fn main() -> std::io::Result<()> {
-    let bind_addr = env::var("EUTHERPAL_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
+    let bind_addr = env::var("EUTHERPAL_BIND").unwrap_or_else(|_| "127.0.0.1:8791".to_string());
     let listener = TcpListener::bind(&bind_addr)?;
     let game = Arc::new(Mutex::new(GameState::new()));
 
