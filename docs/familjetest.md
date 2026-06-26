@@ -9,19 +9,19 @@ cargo run --manifest-path server/Cargo.toml
 TV-skärm:
 
 ```text
-http://127.0.0.1:8791/tv
+http://127.0.0.1:8793/tv
 ```
 
 Mobiler:
 
 ```text
-http://127.0.0.1:8791/mobile
+http://127.0.0.1:8793/mobile
 ```
 
 Admin/bank:
 
 ```text
-http://127.0.0.1:8791/admin
+http://127.0.0.1:8793/admin
 ```
 
 ## Spela

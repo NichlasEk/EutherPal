@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/EutherPal
-Environment=EUTHERPAL_BIND=0.0.0.0:8791
+Environment=EUTHERPAL_BIND=0.0.0.0:8793
 Environment=EUTHERPAL_LLM_URL=http://127.0.0.1:11434/api/generate
 Environment=EUTHERPAL_LLM_MODEL=supergemma4-26b-free:latest
 ExecStart=%h/EutherPal/server/target/release/server
