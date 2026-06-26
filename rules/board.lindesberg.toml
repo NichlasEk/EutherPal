@@ -7,6 +7,9 @@ name = "Gå"
 index = 1
 kind = "property"
 name = "Kristinavägen"
+color = "brown"
+price = 600
+rent = 20
 
 [[spaces]]
 index = 2
@@ -17,6 +20,9 @@ name = "Allmänning"
 index = 3
 kind = "property"
 name = "Kungsgatan"
+color = "brown"
+price = 600
+rent = 40
 
 [[spaces]]
 index = 4
@@ -27,11 +33,16 @@ name = "Inkomstskatt"
 index = 5
 kind = "station"
 name = "Lindesberg C"
+price = 2000
+rent = 250
 
 [[spaces]]
 index = 6
 kind = "property"
 name = "Storgatan"
+color = "light_blue"
+price = 1000
+rent = 60
 
 [[spaces]]
 index = 7
@@ -42,11 +53,17 @@ name = "Chans"
 index = 8
 kind = "property"
 name = "Rådhustorget"
+color = "light_blue"
+price = 1000
+rent = 60
 
 [[spaces]]
 index = 9
 kind = "property"
 name = "Prästgatan"
+color = "light_blue"
+price = 1200
+rent = 80
 
 [[spaces]]
 index = 10
@@ -57,31 +74,47 @@ name = "Fängelse"
 index = 11
 kind = "property"
 name = "Köpmangatan"
+color = "pink"
+price = 1400
+rent = 100
 
 [[spaces]]
 index = 12
 kind = "utility"
 name = "Elverket"
+price = 1500
+rent = 100
 
 [[spaces]]
 index = 13
 kind = "property"
 name = "Bergslagsvägen"
+color = "pink"
+price = 1400
+rent = 100
 
 [[spaces]]
 index = 14
 kind = "property"
 name = "Norrtullsgatan"
+color = "pink"
+price = 1600
+rent = 120
 
 [[spaces]]
 index = 15
 kind = "station"
 name = "Frövi station"
+price = 2000
+rent = 250
 
 [[spaces]]
 index = 16
 kind = "property"
 name = "Bondegatan"
+color = "orange"
+price = 1800
+rent = 140
 
 [[spaces]]
 index = 17
@@ -92,11 +125,17 @@ name = "Allmänning"
 index = 18
 kind = "property"
 name = "Kyrkberget"
+color = "orange"
+price = 1800
+rent = 140
 
 [[spaces]]
 index = 19
 kind = "property"
 name = "Smedjegatan"
+color = "orange"
+price = 2000
+rent = 160
 
 [[spaces]]
 index = 20
@@ -107,6 +146,9 @@ name = "Fri parkering"
 index = 21
 kind = "property"
 name = "Loppholmarna"
+color = "red"
+price = 2200
+rent = 180
 
 [[spaces]]
 index = 22
@@ -117,36 +159,55 @@ name = "Chans"
 index = 23
 kind = "property"
 name = "Strandpromenaden"
+color = "red"
+price = 2200
+rent = 180
 
 [[spaces]]
 index = 24
 kind = "property"
 name = "Sjövägen"
+color = "red"
+price = 2400
+rent = 200
 
 [[spaces]]
 index = 25
 kind = "station"
 name = "Storå station"
+price = 2000
+rent = 250
 
 [[spaces]]
 index = 26
 kind = "property"
 name = "Björkhyttevägen"
+color = "yellow"
+price = 2600
+rent = 220
 
 [[spaces]]
 index = 27
 kind = "utility"
 name = "Vattenverket"
+price = 1500
+rent = 100
 
 [[spaces]]
 index = 28
 kind = "property"
 name = "Gusselbyvägen"
+color = "yellow"
+price = 2600
+rent = 220
 
 [[spaces]]
 index = 29
 kind = "property"
 name = "Löpargatan"
+color = "yellow"
+price = 2800
+rent = 240
 
 [[spaces]]
 index = 30
@@ -157,11 +218,17 @@ name = "Gå i fängelse"
 index = 31
 kind = "property"
 name = "Hagavägen"
+color = "green"
+price = 3000
+rent = 260
 
 [[spaces]]
 index = 32
 kind = "property"
 name = "Lasarettsgatan"
+color = "green"
+price = 3000
+rent = 260
 
 [[spaces]]
 index = 33
@@ -172,11 +239,16 @@ name = "Allmänning"
 index = 34
 kind = "property"
 name = "Brotorpsvägen"
+color = "green"
+price = 3200
+rent = 280
 
 [[spaces]]
 index = 35
 kind = "station"
 name = "Fellingsbro station"
+price = 2000
+rent = 250
 
 [[spaces]]
 index = 36
@@ -187,6 +259,9 @@ name = "Chans"
 index = 37
 kind = "property"
 name = "Lindesjön"
+color = "blue"
+price = 3500
+rent = 350
 
 [[spaces]]
 index = 38
@@ -197,3 +272,6 @@ name = "Lyxskatt"
 index = 39
 kind = "property"
 name = "Apothic Avenue"
+color = "blue"
+price = 4000
+rent = 500

@@ -49,12 +49,12 @@ function renderTv(state) {
 
   const board = document.getElementById("board");
   board.innerHTML = "";
-  state.spaces.forEach((name, index) => {
+  state.spaces.forEach((space, index) => {
     const tile = document.createElement("div");
-    tile.className = `tile ${tileClass(index)}`;
+    tile.className = `tile ${tileClass(space, index)}`;
     tile.style.gridArea = gridAreaForBoardIndex(index);
     tile.tabIndex = 0;
-    tile.innerHTML = `<span class="tile-index">${index}</span><strong>${name}</strong><div class="tokens">${tokensAt(state.players, index)}</div>`;
+    tile.innerHTML = `<span class="tile-index">${index}</span><strong>${space.name}</strong>${spaceDetails(space)}<div class="tokens">${tokensAt(state.players, index)}</div>`;
     board.appendChild(tile);
   });
 
@@ -83,8 +83,17 @@ function renderMobile(state) {
   });
 
   renderTokenButtons(state);
+  renderOfferControls(state);
   document.getElementById("roll-button").onclick = async () => {
     const updated = await postAction("/api/game/roll", "");
+    renderMobile(updated);
+  };
+  document.getElementById("buy-button").onclick = async () => {
+    const updated = await postAction("/api/game/buy", "");
+    renderMobile(updated);
+  };
+  document.getElementById("decline-button").onclick = async () => {
+    const updated = await postAction("/api/game/decline", "");
     renderMobile(updated);
   };
   document.getElementById("new-game-button").onclick = async () => {
@@ -129,11 +138,36 @@ async function renderSettings() {
   };
 }
 
+function spaceDetails(space) {
+  if (space.owner) return `<small>Ägs: ${space.owner}</small>`;
+  if (space.price) return `<small>${space.price} kr</small>`;
+  return "";
+}
+
 function tokensAt(players, position) {
   return players
     .filter((player) => player.position === position && player.token)
     .map((player) => `<span title="${player.name}">${tokenIcon(player.token)}</span>`)
     .join("");
+}
+
+function renderOfferControls(state) {
+  const buyButton = document.getElementById("buy-button");
+  const declineButton = document.getElementById("decline-button");
+  const rollButton = document.getElementById("roll-button");
+  const offer = state.pendingOffer;
+
+  buyButton.disabled = !offer;
+  declineButton.disabled = !offer;
+  rollButton.disabled = Boolean(offer) || state.phase === "token_selection";
+
+  if (offer) {
+    buyButton.textContent = `Köp ${offer.spaceName}`;
+    declineButton.textContent = "Avstå köp";
+  } else {
+    buyButton.textContent = "Köp fastighet";
+    declineButton.textContent = "Avstå";
+  }
 }
 
 function renderTokenButtons(state) {
@@ -170,14 +204,14 @@ function tokenIcon(token) {
   }[token] || "?";
 }
 
-function tileClass(index) {
-  if ([0, 10, 20, 30].includes(index)) return "corner";
-  if ([2, 17, 33].includes(index)) return "community";
-  if ([7, 22, 36].includes(index)) return "chance";
-  if ([5, 15, 25, 35].includes(index)) return "station";
-  if ([12, 28].includes(index)) return "utility";
-  if ([4, 38].includes(index)) return "tax";
-  return `property color-${Math.floor(index / 5) % 8}`;
+function tileClass(space, index) {
+  if (["go", "jail", "free_parking", "go_to_jail"].includes(space.kind)) return "corner";
+  if (space.kind === "community") return "community";
+  if (space.kind === "chance") return "chance";
+  if (space.kind === "station") return "station";
+  if (space.kind === "utility") return "utility";
+  if (space.kind === "tax") return "tax";
+  return `property color-${space.color || Math.floor(index / 5) % 8}`;
 }
 
 function gridAreaForBoardIndex(index) {

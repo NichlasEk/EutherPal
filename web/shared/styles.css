@@ -150,7 +150,8 @@ textarea {
 .tile {
   position: relative;
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr auto auto;
+  gap: 1px;
   min-width: 0;
   min-height: 0;
   border: 1px solid var(--line);
@@ -172,6 +173,16 @@ textarea {
   text-align: center;
 }
 
+.tile small {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.5rem;
+  font-weight: 800;
+  line-height: 1.05;
+  text-align: center;
+}
+
 .tile-index {
   color: var(--muted);
   font-size: 0.58rem;
@@ -183,16 +194,16 @@ textarea {
   flex-wrap: wrap;
   justify-content: center;
   gap: 2px;
-  min-height: 17px;
+  min-height: 15px;
 }
 
 .tokens span {
   border-radius: 999px;
-  min-width: 22px;
-  padding: 1px 5px;
+  min-width: 20px;
+  padding: 1px 4px;
   background: var(--ink);
   color: white;
-  font-size: 0.58rem;
+  font-size: 0.55rem;
   font-weight: 800;
   text-align: center;
 }
@@ -237,6 +248,14 @@ textarea {
 .color-5::before { background: #e6c84e; }
 .color-6::before { background: #2f9d5b; }
 .color-7::before { background: #244f9e; }
+.color-brown::before { background: #7a4d2d; }
+.color-light_blue::before { background: #8cc4df; }
+.color-pink::before { background: #b04786; }
+.color-orange::before { background: #e07a2f; }
+.color-red::before { background: #c23535; }
+.color-yellow::before { background: #e6c84e; }
+.color-green::before { background: #2f9d5b; }
+.color-blue::before { background: #244f9e; }
 
 .side-panel,
 .phone-shell,
@@ -343,6 +362,12 @@ textarea {
 }
 
 .token-buttons button:disabled {
+  border-color: #a8a097;
+  background: #d8d2c6;
+  color: #69635c;
+}
+
+.action-grid button:disabled {
   border-color: #a8a097;
   background: #d8d2c6;
   color: #69635c;

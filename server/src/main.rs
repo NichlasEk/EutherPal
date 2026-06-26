@@ -13,6 +13,7 @@ const ADMIN_HTML: &str = include_str!("../../web/admin/index.html");
 const STYLES_CSS: &str = include_str!("../../web/shared/styles.css");
 const APP_JS: &str = include_str!("../../web/shared/app.js");
 const DEFAULT_PREPROMPT: &str = include_str!("../../prompts/supergemma.bank.sv.md");
+const BOARD_TOML: &str = include_str!("../../rules/board.lindesberg.toml");
 const SETTINGS_PATH: &str = "data/settings.toml";
 const DEFAULT_MODEL: &str = "supergemma";
 
@@ -24,49 +25,6 @@ const TOKEN_CHOICES: &[(&str, &str)] = &[
     ("sko", "Sko"),
 ];
 
-const BOARD_SPACES: [&str; 40] = [
-    "Gå",
-    "Kristinavägen",
-    "Allmänning",
-    "Kungsgatan",
-    "Inkomstskatt",
-    "Lindesberg C",
-    "Storgatan",
-    "Chans",
-    "Rådhustorget",
-    "Prästgatan",
-    "Fängelse",
-    "Köpmangatan",
-    "Elverket",
-    "Bergslagsvägen",
-    "Norrtullsgatan",
-    "Frövi station",
-    "Bondegatan",
-    "Allmänning",
-    "Kyrkberget",
-    "Smedjegatan",
-    "Fri parkering",
-    "Loppholmarna",
-    "Chans",
-    "Strandpromenaden",
-    "Sjövägen",
-    "Storå station",
-    "Björkhyttevägen",
-    "Vattenverket",
-    "Gusselbyvägen",
-    "Löpargatan",
-    "Gå i fängelse",
-    "Hagavägen",
-    "Lasarettsgatan",
-    "Allmänning",
-    "Brotorpsvägen",
-    "Fellingsbro station",
-    "Chans",
-    "Lindesjön",
-    "Lyxskatt",
-    "Apothic Avenue",
-];
-
 #[derive(Clone)]
 struct Player {
     name: String,
@@ -75,14 +33,32 @@ struct Player {
     token: Option<String>,
 }
 
+#[derive(Clone)]
+struct BoardSpace {
+    index: usize,
+    kind: String,
+    name: String,
+    color: Option<String>,
+    price: Option<i32>,
+    rent: Option<i32>,
+}
+
+struct PendingOffer {
+    player_index: usize,
+    space_index: usize,
+}
+
 struct GameState {
     room_code: String,
     phase: Phase,
     players: Vec<Player>,
+    spaces: Vec<BoardSpace>,
+    owners: Vec<Option<usize>>,
     selection_order: Vec<usize>,
     selection_cursor: usize,
     current_player_index: usize,
     dice: [u8; 2],
+    pending_offer: Option<PendingOffer>,
     bank_message: String,
 }
 
@@ -179,6 +155,16 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
             game.roll_current_player();
             json(200, &game.to_json())
         }
+        ("POST", "/api/game/buy") => {
+            let mut game = game.lock().expect("game state lock");
+            game.buy_pending_property();
+            json(200, &game.to_json())
+        }
+        ("POST", "/api/game/decline") => {
+            let mut game = game.lock().expect("game state lock");
+            game.decline_pending_property();
+            json(200, &game.to_json())
+        }
         ("GET", "/tv") | ("GET", "/tv/") => html(200, TV_HTML),
         ("GET", "/mobile") | ("GET", "/mobile/") => html(200, MOBILE_HTML),
         ("GET", "/admin") | ("GET", "/admin/") => html(200, ADMIN_HTML),
@@ -225,6 +211,8 @@ impl Settings {
 
 impl GameState {
     fn new() -> Self {
+        let spaces = parse_board_spaces(BOARD_TOML);
+        let owners = vec![None; spaces.len()];
         let players = vec![
             Player::new("Anna"),
             Player::new("Bo"),
@@ -242,10 +230,13 @@ impl GameState {
             room_code: "PAL-001".to_string(),
             phase: Phase::TokenSelection,
             players,
+            spaces,
+            owners,
             selection_order,
             selection_cursor: 0,
             current_player_index: first,
             dice: [0, 0],
+            pending_offer: None,
             bank_message: format!(
                 "{first_name} börjar och väljer pjäs först. Välj en av de fem klassiska pjäserna."
             ),
@@ -300,27 +291,109 @@ impl GameState {
                 "Alla spelare måste välja pjäs innan första tärningsslaget.".to_string();
             return;
         }
+        if self.pending_offer.is_some() {
+            self.bank_message = "Avsluta köpfrågan innan nästa tärningsslag.".to_string();
+            return;
+        }
 
         self.dice = [random_die(), random_die()];
         let steps = (self.dice[0] + self.dice[1]) as usize;
         let player = &mut self.players[self.current_player_index];
         let old_position = player.position;
-        player.position = (player.position + steps) % BOARD_SPACES.len();
-        if old_position + steps >= BOARD_SPACES.len() {
+        player.position = (player.position + steps) % self.spaces.len();
+        if old_position + steps >= self.spaces.len() {
             player.cash += 2000;
         }
 
-        let landed = BOARD_SPACES[player.position];
+        let landed_index = player.position;
+        let landed = self.spaces[landed_index].clone();
         self.bank_message = format!(
-            "{} slog {} + {} och går till {landed}.",
-            player.name, self.dice[0], self.dice[1]
+            "{} slog {} + {} och går till {}.",
+            player.name, self.dice[0], self.dice[1], landed.name
         );
 
-        if self.dice[0] != self.dice[1] {
-            self.current_player_index = (self.current_player_index + 1) % self.players.len();
-        } else {
+        if landed.is_buyable() {
+            match self.owners[landed_index] {
+                None => {
+                    let price = landed.price.unwrap_or(0);
+                    self.pending_offer = Some(PendingOffer {
+                        player_index: self.current_player_index,
+                        space_index: landed_index,
+                    });
+                    self.bank_message
+                        .push_str(&format!(" Vill du köpa {} för {} kr?", landed.name, price));
+                    return;
+                }
+                Some(owner_index) if owner_index != self.current_player_index => {
+                    let rent = landed.rent.unwrap_or(0);
+                    let payer_name = self.players[self.current_player_index].name.clone();
+                    let owner_name = self.players[owner_index].name.clone();
+                    self.players[self.current_player_index].cash -= rent;
+                    self.players[owner_index].cash += rent;
+                    self.bank_message.push_str(&format!(
+                        " {} äger rutan. {payer_name} betalar {} kr i hyra till {owner_name}.",
+                        owner_name, rent
+                    ));
+                }
+                Some(_) => {
+                    self.bank_message.push_str(" Du äger redan den här rutan.");
+                }
+            }
+        }
+
+        self.finish_turn_after_roll();
+    }
+
+    fn buy_pending_property(&mut self) {
+        let Some(offer) = self.pending_offer.take() else {
+            self.bank_message = "Det finns ingen fastighet att köpa just nu.".to_string();
+            return;
+        };
+        if offer.player_index != self.current_player_index {
+            self.bank_message = "Det är inte rätt spelare för den här köpfrågan.".to_string();
+            self.pending_offer = Some(offer);
+            return;
+        }
+
+        let space = self.spaces[offer.space_index].clone();
+        let price = space.price.unwrap_or(0);
+        if self.players[offer.player_index].cash < price {
+            self.bank_message = format!(
+                "{} har inte råd att köpa {} för {} kr.",
+                self.players[offer.player_index].name, space.name, price
+            );
+            self.finish_turn_after_roll();
+            return;
+        }
+
+        self.players[offer.player_index].cash -= price;
+        self.owners[offer.space_index] = Some(offer.player_index);
+        self.bank_message = format!(
+            "{} köper {} för {} kr.",
+            self.players[offer.player_index].name, space.name, price
+        );
+        self.finish_turn_after_roll();
+    }
+
+    fn decline_pending_property(&mut self) {
+        let Some(offer) = self.pending_offer.take() else {
+            self.bank_message = "Det finns ingen köpfråga att avstå.".to_string();
+            return;
+        };
+        let space = self.spaces[offer.space_index].clone();
+        self.bank_message = format!(
+            "{} avstår från att köpa {}. Auktion kommer i en senare version.",
+            self.players[offer.player_index].name, space.name
+        );
+        self.finish_turn_after_roll();
+    }
+
+    fn finish_turn_after_roll(&mut self) {
+        if self.dice[0] == self.dice[1] {
             self.bank_message
                 .push_str(" Dubbel, samma spelare slår igen.");
+        } else {
+            self.current_player_index = (self.current_player_index + 1) % self.players.len();
         }
     }
 
@@ -348,9 +421,24 @@ impl GameState {
             })
             .collect::<Vec<_>>()
             .join(",");
-        let spaces = BOARD_SPACES
+        let spaces = self
+            .spaces
             .iter()
-            .map(|space| format!("\"{}\"", escape_json(space)))
+            .map(|space| {
+                let owner = self.owners[space.index]
+                    .map(|owner| format!("\"{}\"", escape_json(&self.players[owner].name)))
+                    .unwrap_or_else(|| "null".to_string());
+                format!(
+                    "{{\"index\":{},\"kind\":\"{}\",\"name\":\"{}\",\"color\":{},\"price\":{},\"rent\":{},\"owner\":{}}}",
+                    space.index,
+                    escape_json(&space.kind),
+                    escape_json(&space.name),
+                    optional_json_string(space.color.as_deref()),
+                    optional_json_number(space.price),
+                    optional_json_number(space.rent),
+                    owner
+                )
+            })
             .collect::<Vec<_>>()
             .join(",");
         let token_choices = TOKEN_CHOICES
@@ -371,7 +459,7 @@ impl GameState {
             .join(",");
 
         format!(
-            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}]}}",
+            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"pendingOffer\":{},\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}]}}",
             escape_json(&self.room_code),
             if self.phase == Phase::TokenSelection {
                 "token_selection"
@@ -382,10 +470,33 @@ impl GameState {
             escape_json(&self.bank_message),
             self.dice[0],
             self.dice[1],
+            self.pending_offer_json(),
             players,
             token_choices,
             spaces
         )
+    }
+
+    fn pending_offer_json(&self) -> String {
+        let Some(offer) = &self.pending_offer else {
+            return "null".to_string();
+        };
+        let space = &self.spaces[offer.space_index];
+        format!(
+            "{{\"player\":\"{}\",\"spaceIndex\":{},\"spaceName\":\"{}\",\"price\":{}}}",
+            escape_json(&self.players[offer.player_index].name),
+            offer.space_index,
+            escape_json(&space.name),
+            space.price.unwrap_or(0)
+        )
+    }
+}
+
+impl BoardSpace {
+    fn is_buyable(&self) -> bool {
+        matches!(self.kind.as_str(), "property" | "station" | "utility")
+            && self.price.is_some()
+            && self.rent.is_some()
     }
 }
 
@@ -503,11 +614,82 @@ fn optional_json_string(value: Option<&str>) -> String {
     }
 }
 
+fn optional_json_number(value: Option<i32>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
+}
+
 fn escape_json(value: &str) -> String {
     value
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('\n', "\\n")
+}
+
+fn parse_board_spaces(toml: &str) -> Vec<BoardSpace> {
+    let mut spaces = Vec::new();
+    let mut current = Vec::new();
+
+    for line in toml.lines() {
+        if line.trim() == "[[spaces]]" {
+            if !current.is_empty() {
+                spaces.push(parse_space_block(&current));
+                current.clear();
+            }
+        } else if !line.trim().is_empty() {
+            current.push(line.to_string());
+        }
+    }
+
+    if !current.is_empty() {
+        spaces.push(parse_space_block(&current));
+    }
+
+    spaces.sort_by_key(|space| space.index);
+    spaces
+}
+
+fn parse_space_block(lines: &[String]) -> BoardSpace {
+    let mut index = 0;
+    let mut kind = String::new();
+    let mut name = String::new();
+    let mut color = None;
+    let mut price = None;
+    let mut rent = None;
+
+    for line in lines {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        match key {
+            "index" => index = value.parse().unwrap_or(0),
+            "kind" => kind = trim_toml_quotes(value).to_string(),
+            "name" => name = trim_toml_quotes(value).to_string(),
+            "color" => color = Some(trim_toml_quotes(value).to_string()),
+            "price" => price = value.parse().ok(),
+            "rent" => rent = value.parse().ok(),
+            _ => {}
+        }
+    }
+
+    BoardSpace {
+        index,
+        kind,
+        name,
+        color,
+        price,
+        rent,
+    }
+}
+
+fn trim_toml_quotes(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(value)
 }
 
 fn load_settings() -> Settings {
