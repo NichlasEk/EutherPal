@@ -36,13 +36,13 @@ public final class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(Color.rgb(31, 22, 9));
+        root.setBackgroundColor(Color.rgb(29, 32, 33));
 
         webView = new WebView(this);
         webView.setFocusable(true);
         webView.setFocusableInTouchMode(true);
         webView.requestFocus();
-        webView.setBackgroundColor(Color.rgb(31, 22, 9));
+        webView.setBackgroundColor(Color.rgb(29, 32, 33));
 
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -51,6 +51,7 @@ public final class MainActivity extends Activity {
         settings.setUseWideViewPort(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        disableForceDark(settings);
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -160,6 +161,14 @@ public final class MainActivity extends Activity {
         } else {
             statusView.setText(message);
             statusView.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void disableForceDark(WebSettings settings) {
+        try {
+            WebSettings.class.getMethod("setForceDark", int.class).invoke(settings, 0);
+        } catch (Exception ignored) {
+            // Older WebView versions do not expose force-dark controls.
         }
     }
 }

@@ -3,6 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="supported-color-schemes" content="dark">
     <title>EutherPål Mobil</title>
     <link rel="stylesheet" href="/assets/styles.css">
     <script defer src="/assets/app.js"></script>
@@ -14,6 +16,7 @@
         <h1 id="mobile-view-title">Spelarpanel</h1>
         <nav class="mobile-tabs" aria-label="Mobilvy">
           <button class="active" type="button" data-mobile-tab="player" aria-selected="true">Spelare</button>
+          <button type="button" data-mobile-tab="assets" aria-selected="false">Fastigheter</button>
           <button type="button" data-mobile-tab="admin" aria-selected="false">Admin</button>
         </nav>
       </header>
@@ -43,7 +46,6 @@
               <div id="auction-panel" class="auction-panel"></div>
               <div id="jail-panel" class="asset-panel"></div>
               <div id="build-panel" class="build-panel"></div>
-              <div id="asset-panel" class="asset-panel"></div>
               <div class="action-grid">
                 <button id="roll-button" type="button">Kasta tärning</button>
                 <button id="buy-button" type="button">Köp fastighet</button>
@@ -62,6 +64,14 @@
                 <button type="submit">Skicka</button>
               </form>
               <ol id="mobile-events" class="event-list"></ol>
+            </section>
+          </section>
+
+          <section class="mobile-page mobile-assets-page" data-mobile-page="assets">
+            <section class="control-panel">
+              <h2>Dina fastigheter</h2>
+              <p id="asset-summary" class="asset-summary">Inga fastigheter ännu.</p>
+              <div id="asset-panel" class="asset-panel"></div>
             </section>
           </section>
 

@@ -345,15 +345,24 @@ function bindMobileSwipe() {
   const title = document.getElementById("mobile-view-title");
   if (!swipe || !pages || tabs.length === 0 || swipe.dataset.bound === "true") return;
   swipe.dataset.bound = "true";
-  let active = localStorage.getItem("eutherpal.mobilePane") === "admin" ? "admin" : "player";
+  const panes = ["player", "assets", "admin"];
+  const paneTitles = {
+    player: "Spelarpanel",
+    assets: "Fastigheter",
+    admin: "Admin",
+  };
+  let active = panes.includes(localStorage.getItem("eutherpal.mobilePane"))
+    ? localStorage.getItem("eutherpal.mobilePane")
+    : "player";
   let startX = 0;
   let startY = 0;
 
   const apply = (next) => {
-    active = next === "admin" ? "admin" : "player";
+    active = panes.includes(next) ? next : "player";
+    const index = panes.indexOf(active);
     localStorage.setItem("eutherpal.mobilePane", active);
-    pages.style.transform = active === "admin" ? "translateX(-50%)" : "translateX(0)";
-    if (title) title.textContent = active === "admin" ? "Admin" : "Spelarpanel";
+    pages.style.transform = `translateX(-${index * (100 / panes.length)}%)`;
+    if (title) title.textContent = paneTitles[active] || "Spelarpanel";
     tabs.forEach((tab) => {
       const selected = tab.dataset.mobileTab === active;
       tab.classList.toggle("active", selected);
@@ -375,7 +384,11 @@ function bindMobileSwipe() {
     const dx = touch.clientX - startX;
     const dy = touch.clientY - startY;
     if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.35) return;
-    apply(dx < 0 ? "admin" : "player");
+    const currentIndex = panes.indexOf(active);
+    const nextIndex = dx < 0
+      ? Math.min(panes.length - 1, currentIndex + 1)
+      : Math.max(0, currentIndex - 1);
+    apply(panes[nextIndex]);
   }, { passive: true });
 
   apply(active);
@@ -587,15 +600,41 @@ function renderBuildControls(state, localPlayer) {
 
 function renderAssetControls(state, localPlayer) {
   const panel = document.getElementById("asset-panel");
+  const summary = document.getElementById("asset-summary");
   if (!panel) return;
   const isLocalTurn = localPlayer?.name === state.currentPlayer;
-  const actions = state.assetActions || [];
-  if (!localPlayer || !isLocalTurn || actions.length === 0) {
+  const actionMap = new Map((state.assetActions || []).map((action) => [Number(action.spaceIndex), action]));
+  const owned = localPlayer
+    ? state.spaces
+        .filter((space) => space.owner === localPlayer.name)
+        .map((space) => {
+          const action = isLocalTurn ? actionMap.get(Number(space.index)) : null;
+          return {
+            spaceIndex: space.index,
+            spaceName: space.name,
+            kind: space.kind,
+            buildings: space.buildings || 0,
+            mortgaged: Boolean(space.mortgaged),
+            mortgageValue: space.mortgageValue || 0,
+            unmortgageCost: space.unmortgageCost || 0,
+            sellValue: Math.floor((space.buildCost || 0) / 2),
+            canMortgage: Boolean(action?.canMortgage),
+            canUnmortgage: Boolean(action?.canUnmortgage),
+            canSellBuilding: Boolean(action?.canSellBuilding),
+          };
+        })
+    : [];
+  if (!localPlayer || owned.length === 0) {
+    if (summary) summary.textContent = localPlayer ? "Du äger inga fastigheter ännu." : "Skriv ditt namn och välj pjäs först.";
     panel.innerHTML = "";
     return;
   }
-  panel.innerHTML = `<h3>Ekonomi</h3>${localPlayer.cash < 0 ? `<p class="debt">Du ligger ${Math.abs(localPlayer.cash)} kr back. Sälj eller inteckna.</p>` : ""}${actions
-    .map((action) => `<div class="asset-row"><strong>${escapeHtml(action.spaceName)}</strong><span>${action.mortgaged ? "Intecknad" : action.buildings ? buildingLabel(action.buildings) : "Fri"}</span><button type="button" data-action="mortgage" data-space="${action.spaceIndex}" ${isLocalTurn && action.canMortgage ? "" : "disabled"}>Inteckna +${action.mortgageValue}</button><button type="button" data-action="unmortgage" data-space="${action.spaceIndex}" ${isLocalTurn && action.canUnmortgage ? "" : "disabled"}>Lös ${action.unmortgageCost}</button><button type="button" data-action="sell-building" data-space="${action.spaceIndex}" ${isLocalTurn && action.canSellBuilding ? "" : "disabled"}>Sälj byggnad +${action.sellValue}</button></div>`)
+  const totalValue = owned.reduce((sum, action) => sum + Number(action.mortgageValue || 0), 0);
+  if (summary) {
+    summary.textContent = `${owned.length} fastigheter · pantvärde ${totalValue} kr${localPlayer.cash < 0 ? ` · skuld ${Math.abs(localPlayer.cash)} kr` : ""}`;
+  }
+  panel.innerHTML = `${localPlayer.cash < 0 ? `<p class="debt">Du ligger ${Math.abs(localPlayer.cash)} kr back. Sälj byggnad eller inteckna.</p>` : ""}${owned
+    .map((action) => `<div class="asset-row"><div class="asset-title"><strong>${escapeHtml(action.spaceName)}</strong><span>${assetStateLabel(action)}</span></div><div class="asset-buttons"><button type="button" data-action="mortgage" data-space="${action.spaceIndex}" ${isLocalTurn && action.canMortgage ? "" : "disabled"}>Inteckna +${action.mortgageValue}</button><button type="button" data-action="unmortgage" data-space="${action.spaceIndex}" ${isLocalTurn && action.canUnmortgage ? "" : "disabled"}>Lös ${action.unmortgageCost}</button><button type="button" data-action="sell-building" data-space="${action.spaceIndex}" ${isLocalTurn && action.canSellBuilding ? "" : "disabled"}>Sälj byggnad +${action.sellValue}</button></div></div>`)
     .join("")}`;
   panel.querySelectorAll("button[data-action]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -604,6 +643,12 @@ function renderAssetControls(state, localPlayer) {
       renderMobile(updated);
     });
   });
+}
+
+function assetStateLabel(action) {
+  if (action.mortgaged) return "Intecknad";
+  if (action.buildings) return buildingLabel(action.buildings);
+  return action.kind === "property" ? "Tomt" : "Ägd";
 }
 
 function renderTokenButtons(state) {
