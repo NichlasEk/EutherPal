@@ -519,12 +519,22 @@ textarea {
 .bank-chat {
   display: grid;
   gap: 8px;
-  max-height: 260px;
+  max-height: 360px;
   overflow: auto;
   border: 2px solid var(--line);
   border-radius: 6px;
   padding: 8px;
   background: #fffdf8;
+}
+
+body[data-view="mobile"] .bank-chat {
+  min-height: 220px;
+  max-height: 46vh;
+}
+
+body[data-view="mobile"] #mobile-events {
+  max-height: 92px;
+  overflow: auto;
 }
 
 .bank-chat:empty {
@@ -801,6 +811,29 @@ textarea {
   background: #d8d2c6;
   color: #69635c;
   text-decoration: line-through;
+}
+
+.inline-control {
+  display: grid;
+  grid-template-columns: auto minmax(64px, 88px);
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  background: #fffdf8;
+  font-weight: 900;
+}
+
+.inline-control span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.inline-control select {
+  min-height: 30px;
+  padding: 2px 6px;
 }
 
 .status-grid {

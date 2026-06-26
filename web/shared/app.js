@@ -120,11 +120,6 @@ function renderMobile(state) {
     const updated = await postAction("/api/game/decline", playerBody());
     renderMobile(updated);
   };
-  document.getElementById("new-game-button").onclick = async () => {
-    const players = document.getElementById("new-game-players")?.value || "4";
-    const updated = await postAction("/api/game/new", new URLSearchParams({ players }).toString());
-    renderMobile(updated);
-  };
 }
 
 function renderAdmin(state) {
@@ -300,7 +295,7 @@ function renderAdminTools(state) {
   bindAdminToolButton("admin-save-game", "/api/game/save", status, "Sparat");
   bindAdminToolButton("admin-load-game", "/api/game/load", status, "Laddat");
   bindAdminToolButton("admin-demo-game", "/api/game/demo", status, "Demo laddad");
-  bindAdminToolButton("admin-new-game", "/api/game/new", status, "Nollställt");
+  bindAdminNewGameButton(status);
 
   const form = document.getElementById("admin-adjust-form");
   form.onsubmit = async (event) => {
@@ -312,6 +307,18 @@ function renderAdminTools(state) {
     });
     const updated = await postAction("/api/game/admin-adjust", body.toString());
     if (status) status.textContent = "Justerat";
+    renderAdmin(updated);
+  };
+}
+
+function bindAdminNewGameButton(status) {
+  const button = document.getElementById("admin-new-game");
+  const select = document.getElementById("admin-new-game-players");
+  if (!button || !select) return;
+  button.onclick = async () => {
+    const players = select.value || "4";
+    const updated = await postAction("/api/game/new", new URLSearchParams({ players }).toString());
+    if (status) status.textContent = `Nytt spel: ${players} spelare`;
     renderAdmin(updated);
   };
 }

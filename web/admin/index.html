@@ -32,7 +32,16 @@
           <button id="admin-save-game" type="button">Spara spel</button>
           <button id="admin-load-game" type="button">Ladda spel</button>
           <button id="admin-demo-game" type="button">Demo-seed</button>
-          <button id="admin-new-game" type="button">Nollställ</button>
+          <label class="inline-control" for="admin-new-game-players">
+            <span>Spelare</span>
+            <select id="admin-new-game-players">
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4" selected>4</option>
+              <option value="5">5</option>
+            </select>
+          </label>
+          <button id="admin-new-game" type="button">Nytt spel</button>
         </div>
         <form id="admin-adjust-form" class="settings-form compact-form">
           <label for="admin-adjust-player">Spelare</label>
