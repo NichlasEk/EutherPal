@@ -27,6 +27,7 @@ const DEFAULT_PLAYER_COUNT: usize = 4;
 const MIN_PLAYER_COUNT: usize = 2;
 const MAX_PLAYER_COUNT: usize = 5;
 const JAIL_FINE: i32 = 500;
+const AUCTION_MIN_MS: u128 = 20_000;
 
 const TOKEN_CHOICES: &[(&str, &str)] = &[
     ("bil", "Bil"),
@@ -74,6 +75,8 @@ struct AuctionState {
     seller_turn_index: usize,
     highest_bid: i32,
     highest_bidder: Option<usize>,
+    started_at_ms: u128,
+    last_bid_at_ms: u128,
 }
 
 #[derive(Clone)]
@@ -658,14 +661,16 @@ impl GameState {
         }
         if let Some(auction) = &self.auction {
             lines.push(format!(
-                "auction\t{}\t{}\t{}\t{}",
+                "auction\t{}\t{}\t{}\t{}\t{}\t{}",
                 auction.space_index,
                 auction.seller_turn_index,
                 auction.highest_bid,
                 auction
                     .highest_bidder
                     .map(|index| index as i32)
-                    .unwrap_or(-1)
+                    .unwrap_or(-1),
+                auction.started_at_ms,
+                auction.last_bid_at_ms
             ));
         }
         for player in &self.players {
@@ -747,11 +752,20 @@ impl GameState {
                 }
                 "auction" if parts.len() >= 5 => {
                     let bidder = parts[4].parse::<i32>().ok()?;
+                    let fallback_time = now_millis();
                     game.auction = Some(AuctionState {
                         space_index: parts[1].parse().ok()?,
                         seller_turn_index: parts[2].parse().ok()?,
                         highest_bid: parts[3].parse().ok()?,
                         highest_bidder: (bidder >= 0).then_some(bidder as usize),
+                        started_at_ms: parts
+                            .get(5)
+                            .and_then(|value| value.parse().ok())
+                            .unwrap_or(fallback_time),
+                        last_bid_at_ms: parts
+                            .get(6)
+                            .and_then(|value| value.parse().ok())
+                            .unwrap_or(fallback_time),
                     });
                 }
                 "player" if parts.len() >= 8 && player_index < game.players.len() => {
@@ -1049,12 +1063,15 @@ impl GameState {
             return;
         };
         let space = self.spaces[offer.space_index].clone();
+        let started_at_ms = now_millis();
         self.phase = Phase::Auction;
         self.auction = Some(AuctionState {
             space_index: offer.space_index,
             seller_turn_index: offer.player_index,
             highest_bid: 0,
             highest_bidder: None,
+            started_at_ms,
+            last_bid_at_ms: started_at_ms,
         });
         self.bank_message = format!(
             "{} avstår från att köpa {}. Auktionen startar på 0 kr.",
@@ -1093,6 +1110,7 @@ impl GameState {
 
         auction.highest_bid = amount;
         auction.highest_bidder = Some(player_index);
+        auction.last_bid_at_ms = now_millis();
         let space_name = self.spaces[auction.space_index].name.clone();
         self.bank_message = format!(
             "{} leder auktionen på {} med {} kr.",
@@ -1105,8 +1123,20 @@ impl GameState {
     }
 
     fn finish_auction(&mut self) {
-        let Some(auction) = self.auction.take() else {
+        let Some(auction_view) = &self.auction else {
             self.bank_message = "Det finns ingen aktiv auktion att avsluta.".to_string();
+            return;
+        };
+        let seconds_left = auction_seconds_left(auction_view);
+        if seconds_left > 0 {
+            let space_name = self.spaces[auction_view.space_index].name.clone();
+            self.bank_message = format!(
+                "Auktionen på {space_name} är öppen i {seconds_left} sekunder till."
+            );
+            return;
+        }
+
+        let Some(auction) = self.auction.take() else {
             return;
         };
 
@@ -1998,14 +2028,18 @@ impl GameState {
         } else {
             auction.highest_bid + 100
         };
+        let seconds_left = auction_seconds_left(auction);
+        let can_finish = seconds_left == 0;
         format!(
-            "{{\"spaceIndex\":{},\"spaceName\":\"{}\",\"highestBid\":{},\"highestBidder\":{},\"nextBid\":{},\"seller\":\"{}\"}}",
+            "{{\"spaceIndex\":{},\"spaceName\":\"{}\",\"highestBid\":{},\"highestBidder\":{},\"nextBid\":{},\"seller\":\"{}\",\"secondsLeft\":{},\"canFinish\":{}}}",
             auction.space_index,
             escape_json(&self.spaces[auction.space_index].name),
             auction.highest_bid,
             highest_bidder,
             next_bid,
-            escape_json(&self.players[auction.seller_turn_index].name)
+            escape_json(&self.players[auction.seller_turn_index].name),
+            seconds_left,
+            can_finish
         )
     }
 
@@ -2662,6 +2696,19 @@ fn random_index(max: usize) -> usize {
     nanos % max
 }
 
+fn now_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn auction_seconds_left(auction: &AuctionState) -> u128 {
+    let anchor = auction.started_at_ms.max(auction.last_bid_at_ms);
+    let elapsed = now_millis().saturating_sub(anchor);
+    AUCTION_MIN_MS.saturating_sub(elapsed).div_ceil(1000)
+}
+
 fn seed_rng(salt: u64) -> u64 {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2795,6 +2842,36 @@ mod tests {
 
         assert_eq!(game.rent_for_space(5), 500);
         assert_eq!(game.rent_for_space(12), 700);
+    }
+
+    #[test]
+    fn auction_cannot_finish_before_countdown() {
+        let mut game = playable_game();
+        let now = now_millis();
+        game.auction = Some(AuctionState {
+            space_index: 1,
+            seller_turn_index: 0,
+            highest_bid: 100,
+            highest_bidder: Some(1),
+            started_at_ms: now,
+            last_bid_at_ms: now,
+        });
+        game.phase = Phase::Auction;
+
+        game.finish_auction();
+
+        assert!(game.auction.is_some());
+        assert!(game.bank_message.contains("sekunder till"));
+
+        if let Some(auction) = &mut game.auction {
+            auction.started_at_ms = now_millis().saturating_sub(AUCTION_MIN_MS + 1000);
+            auction.last_bid_at_ms = auction.started_at_ms;
+        }
+
+        game.finish_auction();
+
+        assert!(game.auction.is_none());
+        assert_eq!(game.owners[1], Some(1));
     }
 
     #[test]

@@ -29,6 +29,7 @@
 
 const TV_TOKEN_STEP_MS = 170;
 let latestTvState = null;
+let actionInFlight = false;
 const tvTokenPositions = new Map();
 const tvTokenTimers = new Map();
 
@@ -62,6 +63,7 @@ function renderTv(state) {
   document.getElementById("dice").textContent =
     state.phase === "token_selection" ? "Pjäsval" : `Tärning: ${state.dice.join(" + ")}`;
   document.getElementById("bank-message").textContent = state.bankMessage;
+  renderTvAuction(state);
 
   const board = document.getElementById("board");
   board.innerHTML = "";
@@ -88,6 +90,19 @@ function renderTv(state) {
 
   renderPropertyCard(document.getElementById("tv-card"), selectedSpace(state));
   renderEvents(document.getElementById("tv-events"), state.events);
+}
+
+function renderTvAuction(state) {
+  const panel = document.getElementById("tv-auction");
+  if (!panel) return;
+  if (!state.auction) {
+    panel.innerHTML = "";
+    panel.hidden = true;
+    return;
+  }
+  const auction = state.auction;
+  panel.hidden = false;
+  panel.innerHTML = `<strong>Auktion: ${escapeHtml(auction.spaceName)}</strong><span>Högsta bud ${auction.highestBid} kr${auction.highestBidder ? ` · ${escapeHtml(auction.highestBidder)}` : ""}</span><em>${auction.canFinish ? "Kan slutföras nu" : `${auction.secondsLeft}s kvar att bjuda`}</em>`;
 }
 
 function playersForTvBoard(state) {
@@ -176,18 +191,12 @@ function renderMobile(state) {
   renderAssetControls(state, local);
   renderBankChat(document.getElementById("bank-chat"), state.bankChat);
   bindMobileBankChat(state);
-  document.getElementById("roll-button").onclick = async () => {
-    const updated = await postAction("/api/game/roll", playerBody());
-    renderMobile(updated);
-  };
-  document.getElementById("buy-button").onclick = async () => {
-    const updated = await postAction("/api/game/buy", playerBody());
-    renderMobile(updated);
-  };
-  document.getElementById("decline-button").onclick = async () => {
-    const updated = await postAction("/api/game/decline", playerBody());
-    renderMobile(updated);
-  };
+  document.getElementById("roll-button").onclick = (event) =>
+    runMobileAction(event.currentTarget, "Kastar...", "/api/game/roll", playerBody());
+  document.getElementById("buy-button").onclick = (event) =>
+    runMobileAction(event.currentTarget, "Köper...", "/api/game/buy", playerBody());
+  document.getElementById("decline-button").onclick = (event) =>
+    runMobileAction(event.currentTarget, "Startar auktion...", "/api/game/decline", playerBody());
 }
 
 function renderAdmin(state) {
@@ -496,6 +505,11 @@ function renderOfferControls(state, localPlayer) {
   buyButton.disabled = !offerForLocal;
   declineButton.disabled = !offerForLocal;
   rollButton.disabled = !isLocalTurn || Boolean(offer) || Boolean(state.auction) || state.phase === "token_selection";
+  if (actionInFlight) {
+    buyButton.disabled = true;
+    declineButton.disabled = true;
+    rollButton.disabled = true;
+  }
   if (localPlayer?.jailed) rollButton.textContent = "Slå för dubbel";
   else rollButton.textContent = "Kasta tärning";
 
@@ -519,26 +533,24 @@ function renderAuctionControls(state, localPlayer) {
   const bid100 = auction.nextBid;
   const bid500 = auction.highestBid + 500;
   const bidderButtons = localPlayer
-    ? `<div class="auction-row"><strong>${escapeHtml(localPlayer.name)}</strong><button type="button" data-bidder="${escapeHtml(localPlayer.name)}" data-amount="${bid100}" ${localPlayer.cash < bid100 ? "disabled" : ""}>${bid100} kr</button><button type="button" data-bidder="${escapeHtml(localPlayer.name)}" data-amount="${bid500}" ${localPlayer.cash < bid500 ? "disabled" : ""}>${bid500} kr</button></div>`
+    ? `<div class="auction-row"><strong>${escapeHtml(localPlayer.name)}</strong><button type="button" data-bidder="${escapeHtml(localPlayer.name)}" data-amount="${bid100}" ${actionInFlight || localPlayer.cash < bid100 ? "disabled" : ""}>${bid100} kr</button><button type="button" data-bidder="${escapeHtml(localPlayer.name)}" data-amount="${bid500}" ${actionInFlight || localPlayer.cash < bid500 ? "disabled" : ""}>${bid500} kr</button></div>`
     : `<p>Skriv ditt namn och välj pjäs för att lägga bud.</p>`;
+  const finishText = auction.canFinish ? "Slutför auktion" : `Vänta ${auction.secondsLeft}s`;
 
-  panel.innerHTML = `<h3>Auktion: ${auction.spaceName}</h3><p>Högsta bud: ${auction.highestBid} kr${auction.highestBidder ? `, ${auction.highestBidder}` : ""}</p>${bidderButtons}<button id="finish-auction-button" type="button">Slutför auktion</button>`;
+  panel.innerHTML = `<h3>Auktion: ${auction.spaceName}</h3><p>Högsta bud: ${auction.highestBid} kr${auction.highestBidder ? `, ${auction.highestBidder}` : ""}. ${auction.canFinish ? "Auktionen kan slutföras." : `${auction.secondsLeft}s kvar att bjuda.`}</p>${bidderButtons}<button id="finish-auction-button" type="button" ${actionInFlight || !auction.canFinish ? "disabled" : ""}>${finishText}</button>`;
 
   panel.querySelectorAll("button[data-bidder]").forEach((button) => {
-    button.addEventListener("click", async () => {
+    button.addEventListener("click", () => {
       const body = new URLSearchParams({
         player: button.dataset.bidder,
         amount: button.dataset.amount,
       });
-      const updated = await postAction("/api/game/auction/bid", body.toString());
-      renderMobile(updated);
+      runMobileAction(button, "Budar...", "/api/game/auction/bid", body.toString());
     });
   });
 
-  document.getElementById("finish-auction-button").onclick = async () => {
-    const updated = await postAction("/api/game/auction/finish", "");
-    renderMobile(updated);
-  };
+  document.getElementById("finish-auction-button").onclick = (event) =>
+    runMobileAction(event.currentTarget, "Slutför...", "/api/game/auction/finish", "");
 }
 
 function renderJailControls(state, localPlayer) {
@@ -552,10 +564,9 @@ function renderJailControls(state, localPlayer) {
   panel.innerHTML = `<h3>Fängelse</h3><p>Försök ${localPlayer.jailTurns || 0}/3. Slå dubbel eller betala 500 kr.</p><button id="pay-jail-button" type="button" ${isLocalTurn && localPlayer.cash >= 500 ? "" : "disabled"}>Betala 500 kr</button>`;
   const button = document.getElementById("pay-jail-button");
   if (button) {
-    button.onclick = async () => {
-      const updated = await postAction("/api/game/pay-jail", playerBody());
-      renderMobile(updated);
-    };
+    button.disabled = button.disabled || actionInFlight;
+    button.onclick = (event) =>
+      runMobileAction(event.currentTarget, "Betalar...", "/api/game/pay-jail", playerBody());
   }
 }
 
@@ -567,6 +578,7 @@ function renderBuildControls(state, localPlayer) {
   const isLocalTurn = localPlayer?.name === state.currentPlayer;
   const options = state.buildableProperties || [];
   buildButton.disabled = !isLocalTurn || options.length === 0 || !options.some((option) => option.canBuild);
+  if (actionInFlight) buildButton.disabled = true;
 
   if (options.length === 0) {
     panel.innerHTML = "";
@@ -579,21 +591,20 @@ function renderBuildControls(state, localPlayer) {
     .map((option) => `<button type="button" data-build="${option.spaceIndex}" ${isLocalTurn && option.canBuild ? "" : "disabled"}><strong>${option.spaceName}</strong><span>${option.label} → ${option.nextLabel}</span><em>${option.buildCost} kr · ny hyra ${option.rentAfter} kr</em></button>`)
     .join("")}`;
 
-  panel.querySelectorAll("button[data-build]").forEach((button) => {
-    button.addEventListener("click", async () => {
+    panel.querySelectorAll("button[data-build]").forEach((button) => {
+    if (actionInFlight) button.disabled = true;
+    button.addEventListener("click", () => {
       const body = new URLSearchParams({ player: localPlayerName(), spaceIndex: button.dataset.build });
-      const updated = await postAction("/api/game/build", body.toString());
-      renderMobile(updated);
+      runMobileAction(button, "Bygger...", "/api/game/build", body.toString());
     });
   });
 
   const first = options.find((option) => option.canBuild);
   buildButton.textContent = first && isLocalTurn ? `Bygg ${first.spaceName}` : "Bygg";
   buildButton.onclick = first && isLocalTurn
-    ? async () => {
+    ? (event) => {
         const body = new URLSearchParams({ player: localPlayerName(), spaceIndex: first.spaceIndex });
-        const updated = await postAction("/api/game/build", body.toString());
-        renderMobile(updated);
+        runMobileAction(event.currentTarget, "Bygger...", "/api/game/build", body.toString());
       }
     : null;
 }
@@ -621,6 +632,7 @@ function renderAssetControls(state, localPlayer) {
             canMortgage: Boolean(action?.canMortgage),
             canUnmortgage: Boolean(action?.canUnmortgage),
             canSellBuilding: Boolean(action?.canSellBuilding),
+            color: space.color || space.kind,
           };
         })
     : [];
@@ -634,13 +646,12 @@ function renderAssetControls(state, localPlayer) {
     summary.textContent = `${owned.length} fastigheter · pantvärde ${totalValue} kr${localPlayer.cash < 0 ? ` · skuld ${Math.abs(localPlayer.cash)} kr` : ""}`;
   }
   panel.innerHTML = `${localPlayer.cash < 0 ? `<p class="debt">Du ligger ${Math.abs(localPlayer.cash)} kr back. Sälj byggnad eller inteckna.</p>` : ""}${owned
-    .map((action) => `<div class="asset-row"><div class="asset-title"><strong>${escapeHtml(action.spaceName)}</strong><span>${assetStateLabel(action)}</span></div><div class="asset-buttons"><button type="button" data-action="mortgage" data-space="${action.spaceIndex}" ${isLocalTurn && action.canMortgage ? "" : "disabled"}>Inteckna +${action.mortgageValue}</button><button type="button" data-action="unmortgage" data-space="${action.spaceIndex}" ${isLocalTurn && action.canUnmortgage ? "" : "disabled"}>Lös ${action.unmortgageCost}</button><button type="button" data-action="sell-building" data-space="${action.spaceIndex}" ${isLocalTurn && action.canSellBuilding ? "" : "disabled"}>Sälj byggnad +${action.sellValue}</button></div></div>`)
+    .map((action) => `<div class="asset-row asset-color-${escapeHtml(action.color)}"><div class="asset-title"><strong>${escapeHtml(action.spaceName)}</strong><span>${assetStateLabel(action)}</span></div><div class="asset-buttons"><button type="button" data-action="mortgage" data-space="${action.spaceIndex}" ${isLocalTurn && action.canMortgage && !actionInFlight ? "" : "disabled"}>Inteckna +${action.mortgageValue}</button><button type="button" data-action="unmortgage" data-space="${action.spaceIndex}" ${isLocalTurn && action.canUnmortgage && !actionInFlight ? "" : "disabled"}>Lös ${action.unmortgageCost}</button><button type="button" data-action="sell-building" data-space="${action.spaceIndex}" ${isLocalTurn && action.canSellBuilding && !actionInFlight ? "" : "disabled"}>Sälj byggnad +${action.sellValue}</button></div></div>`)
     .join("")}`;
   panel.querySelectorAll("button[data-action]").forEach((button) => {
-    button.addEventListener("click", async () => {
+    button.addEventListener("click", () => {
       const body = new URLSearchParams({ player: localPlayerName(), spaceIndex: button.dataset.space });
-      const updated = await postAction(`/api/game/${button.dataset.action}`, body.toString());
-      renderMobile(updated);
+      runMobileAction(button, "Skickar...", `/api/game/${button.dataset.action}`, body.toString());
     });
   });
 }
@@ -661,13 +672,52 @@ function renderTokenButtons(state) {
     .join("");
 
   panel.querySelectorAll("button[data-token]").forEach((button) => {
-    button.addEventListener("click", async () => {
+    if (actionInFlight) button.disabled = true;
+    button.addEventListener("click", () => {
       saveLocalPlayer(localPlayerName());
       const body = new URLSearchParams({ player: localPlayerName(), token: button.dataset.token });
-      const updated = await postAction("/api/game/select-token", body.toString());
-      renderMobile(updated);
+      runMobileAction(button, "Väljer...", "/api/game/select-token", body.toString());
     });
   });
+}
+
+async function runMobileAction(button, loadingText, path, body) {
+  if (actionInFlight) return;
+  const oldText = button?.textContent || "";
+  actionInFlight = true;
+  disableMobileActionButtons(true);
+  if (button) {
+    button.disabled = true;
+    button.textContent = loadingText;
+  }
+  try {
+    const updated = await postAction(path, body);
+    actionInFlight = false;
+    renderMobile(updated);
+  } catch (error) {
+    actionInFlight = false;
+    if (button) {
+      button.textContent = "Försök igen";
+      window.setTimeout(() => {
+        button.textContent = oldText;
+      }, 1200);
+    }
+    const status = document.getElementById("mobile-status");
+    if (status) status.textContent = "Requesten gick inte fram. Försök igen.";
+    try {
+      renderMobile(await fetchState());
+    } catch (_) {
+      disableMobileActionButtons(false);
+    }
+  }
+}
+
+function disableMobileActionButtons(disabled) {
+  document
+    .querySelectorAll(".action-grid button, .auction-panel button, .asset-panel button, #token-buttons button, #jail-panel button")
+    .forEach((button) => {
+      button.disabled = disabled;
+    });
 }
 
 function renderPlayerSummary(state, localPlayer) {
