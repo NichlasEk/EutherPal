@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EutherPal Admin</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+    <script defer src="/assets/app.js"></script>
+  </head>
+  <body data-view="admin">
+    <main class="admin-shell">
+      <header>
+        <p class="eyebrow">EutherPal</p>
+        <h1>Admin</h1>
+      </header>
+
+      <section class="control-panel">
+        <h2>Driftstatus</h2>
+        <dl class="status-grid">
+          <dt>Server</dt>
+          <dd id="admin-server">okänd</dd>
+          <dt>AI</dt>
+          <dd id="admin-ai">mock</dd>
+          <dt>Rum</dt>
+          <dd id="admin-room">-</dd>
+        </dl>
+      </section>
+
+      <section class="control-panel">
+        <h2>LLM-profil</h2>
+        <p>Adminvy är scaffoldad. Riktiga inställningar kopplas efter auth och runtime secrets.</p>
+      </section>
+    </main>
+  </body>
+</html>

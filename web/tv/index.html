@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EutherPal TV</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+    <script defer src="/assets/app.js"></script>
+  </head>
+  <body data-view="tv">
+    <main class="tv-shell">
+      <section class="board-wrap" aria-label="Spelplan">
+        <div id="board" class="board"></div>
+        <div class="board-center">
+          <p class="eyebrow">EutherPal</p>
+          <h1>AI Banken</h1>
+          <p id="bank-message">Startar testläge...</p>
+          <div class="room-code">
+            <span>Rumskod</span>
+            <strong id="room-code">PAL-001</strong>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side-panel">
+        <section class="panel-block">
+          <h2>Tur</h2>
+          <p class="current-player" id="current-player">-</p>
+          <p class="dice" id="dice">Tärning: -</p>
+        </section>
+        <section class="panel-block">
+          <h2>Spelare</h2>
+          <div id="players" class="player-list"></div>
+        </section>
+        <section class="panel-block">
+          <h2>Anslut telefon</h2>
+          <p>Öppna <strong>/mobile</strong> och ange rumskoden.</p>
+        </section>
+      </aside>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,80 @@
+(async function bootEutherPal() {
+  const view = document.body.dataset.view;
+  const state = await fetchState();
+
+  if (view === "tv") renderTv(state);
+  if (view === "mobile") renderMobile(state);
+  if (view === "admin") renderAdmin(state);
+})();
+
+async function fetchState() {
+  const response = await fetch("/api/game/mock");
+  if (!response.ok) throw new Error("Kunde inte hämta spelstatus");
+  return response.json();
+}
+
+function renderTv(state) {
+  document.getElementById("room-code").textContent = state.roomCode;
+  document.getElementById("current-player").textContent = state.currentPlayer;
+  document.getElementById("dice").textContent = `Tärning: ${state.dice.join(" + ")}`;
+  document.getElementById("bank-message").textContent = state.bankMessage;
+
+  const board = document.getElementById("board");
+  board.innerHTML = "";
+  state.spaces.forEach((name, index) => {
+    const tile = document.createElement("div");
+    tile.className = `tile ${tileClass(index)}`;
+    tile.style.gridArea = gridAreaForBoardIndex(index);
+    tile.tabIndex = 0;
+    tile.innerHTML = `<span class="tile-index">${index}</span><strong>${name}</strong><div class="tokens">${tokensAt(state.players, index)}</div>`;
+    board.appendChild(tile);
+  });
+
+  const players = document.getElementById("players");
+  players.innerHTML = state.players
+    .map((player) => `<div class="player-row"><strong>${player.name}</strong><span>${player.cash} kr</span><em>${player.token}</em></div>`)
+    .join("");
+}
+
+function renderMobile(state) {
+  document.getElementById("mobile-status").textContent = `${state.currentPlayer} har tur. Mockläge är aktivt.`;
+  document.getElementById("mobile-bank-message").textContent = state.bankMessage;
+  document.getElementById("join-button").addEventListener("click", () => {
+    const room = document.getElementById("room-input").value || state.roomCode;
+    document.getElementById("mobile-status").textContent = `Ansluten till ${room}. Riktiga sessioner kommer i nästa steg.`;
+  });
+}
+
+function renderAdmin(state) {
+  fetch("/health")
+    .then((response) => response.json())
+    .then((health) => {
+      document.getElementById("admin-server").textContent = health.status;
+      document.getElementById("admin-ai").textContent = health.ai;
+    });
+  document.getElementById("admin-room").textContent = state.roomCode;
+}
+
+function tokensAt(players, position) {
+  return players
+    .filter((player) => player.position === position)
+    .map((player) => `<span title="${player.name}">${player.token}</span>`)
+    .join("");
+}
+
+function tileClass(index) {
+  if ([0, 10, 20, 30].includes(index)) return "corner";
+  if ([2, 17, 33].includes(index)) return "community";
+  if ([7, 22, 36].includes(index)) return "chance";
+  if ([5, 15, 25, 35].includes(index)) return "station";
+  if ([12, 28].includes(index)) return "utility";
+  if ([4, 38].includes(index)) return "tax";
+  return `property color-${Math.floor(index / 5) % 8}`;
+}
+
+function gridAreaForBoardIndex(index) {
+  if (index <= 10) return `11 / ${11 - index} / 12 / ${12 - index}`;
+  if (index <= 20) return `${21 - index} / 1 / ${22 - index} / 2`;
+  if (index <= 30) return `1 / ${index - 19} / 2 / ${index - 18}`;
+  return `${index - 29} / 11 / ${index - 28} / 12`;
+}

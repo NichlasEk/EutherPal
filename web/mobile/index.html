@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EutherPal Mobil</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+    <script defer src="/assets/app.js"></script>
+  </head>
+  <body data-view="mobile">
+    <main class="phone-shell">
+      <header class="phone-header">
+        <p class="eyebrow">EutherPal</p>
+        <h1>Spelarpanel</h1>
+      </header>
+
+      <section class="control-panel">
+        <label for="room-input">Rumskod</label>
+        <div class="join-row">
+          <input id="room-input" value="PAL-001" inputmode="text">
+          <button id="join-button" type="button">Gå med</button>
+        </div>
+      </section>
+
+      <section class="control-panel">
+        <h2>Din tur</h2>
+        <p id="mobile-status">Hämtar spelstatus...</p>
+        <div class="action-grid">
+          <button type="button">Kasta tärning</button>
+          <button type="button">Köp fastighet</button>
+          <button type="button">Bygg</button>
+          <button type="button">Fråga banken</button>
+        </div>
+      </section>
+
+      <section class="control-panel">
+        <h2>Banken</h2>
+        <p id="mobile-bank-message">-</p>
+      </section>
+    </main>
+  </body>
+</html>
