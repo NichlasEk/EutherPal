@@ -589,6 +589,7 @@ function tokenLabel(token) {
 function tokenAvatar(player, size = "mini") {
   const token = player?.token || "none";
   const name = player?.name || "";
+  const icon = tokenIcon(token);
   const glyph = {
     bil: "BI",
     hatt: "HA",
@@ -597,7 +598,20 @@ function tokenAvatar(player, size = "mini") {
     sko: "SO",
   }[token] || initials(name);
   const title = `${escapeHtml(name)} ${tokenLabel(token)}`.trim();
-  return `<span class="token-avatar token-${token} token-${size}" title="${title}"><i>${escapeHtml(glyph)}</i></span>`;
+  const iconHtml = icon
+    ? `<img src="${icon}" alt="" loading="lazy"><i>${escapeHtml(glyph)}</i>`
+    : `<i>${escapeHtml(glyph)}</i>`;
+  return `<span class="token-avatar token-${token} token-${size}" title="${title}">${iconHtml}</span>`;
+}
+
+function tokenIcon(token) {
+  return {
+    bil: "/assets/tokens/bil.png",
+    hatt: "/assets/tokens/hatt.png",
+    skepp: "/assets/tokens/skepp.png",
+    hund: "/assets/tokens/hund.png",
+    sko: "/assets/tokens/sko.png",
+  }[token] || "";
 }
 
 function initials(name) {

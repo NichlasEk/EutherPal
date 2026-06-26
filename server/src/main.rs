@@ -12,6 +12,11 @@ const MOBILE_HTML: &str = include_str!("../../web/mobile/index.html");
 const ADMIN_HTML: &str = include_str!("../../web/admin/index.html");
 const STYLES_CSS: &str = include_str!("../../web/shared/styles.css");
 const APP_JS: &str = include_str!("../../web/shared/app.js");
+const TOKEN_BIL_PNG: &[u8] = include_bytes!("../../web/assets/tokens/bil.png");
+const TOKEN_HATT_PNG: &[u8] = include_bytes!("../../web/assets/tokens/hatt.png");
+const TOKEN_SKEPP_PNG: &[u8] = include_bytes!("../../web/assets/tokens/skepp.png");
+const TOKEN_HUND_PNG: &[u8] = include_bytes!("../../web/assets/tokens/hund.png");
+const TOKEN_SKO_PNG: &[u8] = include_bytes!("../../web/assets/tokens/sko.png");
 const DEFAULT_PREPROMPT: &str = include_str!("../../prompts/supergemma.bank.sv.md");
 const BOARD_TOML: &str = include_str!("../../rules/board.lindesberg.toml");
 const CARDS_TOML: &str = include_str!("../../rules/cards.sv.toml");
@@ -393,10 +398,15 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
         ("GET", "/admin") | ("GET", "/admin/") => html(200, ADMIN_HTML),
         ("GET", "/assets/styles.css") => asset(200, "text/css; charset=utf-8", STYLES_CSS),
         ("GET", "/assets/app.js") => asset(200, "application/javascript; charset=utf-8", APP_JS),
+        ("GET", "/assets/tokens/bil.png") => binary_asset(200, "image/png", TOKEN_BIL_PNG),
+        ("GET", "/assets/tokens/hatt.png") => binary_asset(200, "image/png", TOKEN_HATT_PNG),
+        ("GET", "/assets/tokens/skepp.png") => binary_asset(200, "image/png", TOKEN_SKEPP_PNG),
+        ("GET", "/assets/tokens/hund.png") => binary_asset(200, "image/png", TOKEN_HUND_PNG),
+        ("GET", "/assets/tokens/sko.png") => binary_asset(200, "image/png", TOKEN_SKO_PNG),
         _ => html(404, "<h1>404</h1><p>Sidan finns inte.</p>"),
     };
 
-    stream.write_all(response.as_bytes())?;
+    stream.write_all(&response)?;
     stream.flush()?;
     Ok(())
 }
@@ -2171,21 +2181,25 @@ fn url_decode(value: &str) -> String {
     String::from_utf8_lossy(&bytes).to_string()
 }
 
-fn redirect(location: &str) -> String {
+fn redirect(location: &str) -> Vec<u8> {
     format!(
         "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    )
+    ).into_bytes()
 }
 
-fn html(status: u16, body: &str) -> String {
+fn html(status: u16, body: &str) -> Vec<u8> {
     asset(status, "text/html; charset=utf-8", body)
 }
 
-fn json(status: u16, body: &str) -> String {
+fn json(status: u16, body: &str) -> Vec<u8> {
     asset(status, "application/json; charset=utf-8", body)
 }
 
-fn asset(status: u16, content_type: &str, body: &str) -> String {
+fn asset(status: u16, content_type: &str, body: &str) -> Vec<u8> {
+    binary_asset(status, content_type, body.as_bytes())
+}
+
+fn binary_asset(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> {
     let reason = match status {
         200 => "OK",
         302 => "Found",
@@ -2193,10 +2207,13 @@ fn asset(status: u16, content_type: &str, body: &str) -> String {
         _ => "OK",
     };
 
-    format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.as_bytes().len()
+    let mut response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
     )
+    .into_bytes();
+    response.extend_from_slice(body);
+    response
 }
 
 fn optional_json_string(value: Option<&str>) -> String {
