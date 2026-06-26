@@ -94,7 +94,7 @@ fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind(&bind_addr)?;
     let game = Arc::new(Mutex::new(GameState::new()));
 
-    println!("EutherPal dev server listening on http://{bind_addr}");
+    println!("EutherPål dev server listening on http://{bind_addr}");
     println!("TV:     http://{bind_addr}/tv");
     println!("Mobile: http://{bind_addr}/mobile");
     println!("Admin:  http://{bind_addr}/admin");

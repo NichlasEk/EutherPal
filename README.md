@@ -1,4 +1,4 @@
-# EutherPal
+# EutherPål
 
 AI-drivet Monopol-liknande bradspel pa svenska, byggt for Android TV som huvudskarm och telefoner som spelarhandkontroller.
 

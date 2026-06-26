@@ -1,8 +1,8 @@
-# EutherPal plan
+# EutherPål plan
 
-EutherPal ar ett AI-drivet Monopol-liknande bradspel pa svenska. Forsta versionen ska ge en klassisk spelplansupplevelse pa Android TV, med en AI-bank/spelledare som styr spelets flode och spelare som anvander sina telefoner for beslut, fragor och bankarenden.
+EutherPål ar ett AI-drivet Monopol-liknande bradspel pa svenska. Forsta versionen ska ge en klassisk spelplansupplevelse pa Android TV, med en AI-bank/spelledare som styr spelets flode och spelare som anvander sina telefoner for beslut, fragor och bankarenden.
 
-Namnet i GitHub och kodbasen ar `EutherPal`, medan spelet kan visas for anvandare som `EutherPal` eller `EutherPal - AI Monopol`. Undvik svenska specialtecken i paketnamn, repo, URL:er och tekniska identifierare.
+Namnet i GitHub och kodbasen ar `EutherPal`, medan spelet visas for anvandare som `EutherPål`. Undvik svenska specialtecken i paketnamn, repo, URL:er och tekniska identifierare.
 
 ## Produktmal
 
