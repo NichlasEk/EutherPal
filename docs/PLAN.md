@@ -6,7 +6,7 @@ Namnet i GitHub och kodbasen ar `EutherPal`, medan spelet kan visas for anvandar
 
 ## Produktmal
 
-- Klassisk Monopol-kansla: fyrkantig spelplan, gator, stationer, verk, chans/allmanning, fangelse och fri parkering.
+- Klassisk Monopol-kansla: fyrkantig spelplan, gator fran Lindesberg med omnejd, stationer, verk, chans/allmanning, fangelse och fri parkering.
 - Android TV som huvudskarm: spelplanen visas pa TV:n och styrs med Android TV-fjarrkontroll.
 - Mobilen som spelarens kontrollpanel: varje spelare anvander telefonen for att svara pa fragor, kopa fastigheter, bygga hus/hotell, forhandla och prata med banken.
 - AI-bank/spelledare: en lokal LLM agerar bank, spelledare och regelhjalp.
@@ -117,7 +117,7 @@ TV:n ska inte vara den primara platsen for textinmatning. Alla langre val och ko
 Visuellt for forsta versionen:
 
 - klassisk kvadratisk spelplan
-- tydliga svenska gatunamn
+- tydliga svenska gatunamn, primart fran Lindesberg
 - spelpjaser pa bradet
 - aktuell tur och tarningsresultat
 - diskret logg fran banken/spelledaren
@@ -229,11 +229,22 @@ Eftersom Monopol ar ett skyddat varumarke och har upphovsrattsskyddade detaljer 
 
 Forsta innehallsprofil:
 
-- svenska gatunamn med Euther-tema
+- svenska gatunamn med Lindesberg-tema
 - klassisk bradlayout med 40 rutor
 - hyresstegar inspirerade av klassisk struktur men egna siffror kan justeras
 - egna chans-/allmanningkort
 - svenska regler i admin-redigerbara datafiler
+
+Forsta regelprofilen ska ligga nara klassiska Monopol-regler:
+
+- varje spelare borjar med startkapital
+- forsta spelare slumpas i devlaget, med mojlighet att senare byta till hogsta tarningsslag enligt klassisk regel
+- forsta steget i spelstarten ar pjasval
+- fem klassiska pjastyper finns i forsta versionen: bil, hatt, skepp, hund och sko
+- valda pjaser visas pa spelplanen nar de ror sig runt bradet
+- passage av "Ga" ger lon
+- dubbel tarning ger nytt slag
+- servern, inte AI:n, avgor position, pengar och lagliga actions
 
 ## Foreslagen repo-struktur
 

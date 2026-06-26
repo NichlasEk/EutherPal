@@ -5,18 +5,37 @@
   if (view === "tv") renderTv(state);
   if (view === "mobile") renderMobile(state);
   if (view === "admin") renderAdmin(state);
+
+  if (view === "tv" || view === "admin") {
+    window.setInterval(async () => {
+      const freshState = await fetchState();
+      if (view === "tv") renderTv(freshState);
+      if (view === "admin") renderAdmin(freshState);
+    }, 1200);
+  }
 })();
 
 async function fetchState() {
-  const response = await fetch("/api/game/mock");
+  const response = await fetch("/api/game");
   if (!response.ok) throw new Error("Kunde inte hämta spelstatus");
+  return response.json();
+}
+
+async function postAction(path, body) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  if (!response.ok) throw new Error("Kunde inte uppdatera spelet");
   return response.json();
 }
 
 function renderTv(state) {
   document.getElementById("room-code").textContent = state.roomCode;
   document.getElementById("current-player").textContent = state.currentPlayer;
-  document.getElementById("dice").textContent = `Tärning: ${state.dice.join(" + ")}`;
+  document.getElementById("dice").textContent =
+    state.phase === "token_selection" ? "Pjäsval" : `Tärning: ${state.dice.join(" + ")}`;
   document.getElementById("bank-message").textContent = state.bankMessage;
 
   const board = document.getElementById("board");
@@ -32,17 +51,37 @@ function renderTv(state) {
 
   const players = document.getElementById("players");
   players.innerHTML = state.players
-    .map((player) => `<div class="player-row"><strong>${player.name}</strong><span>${player.cash} kr</span><em>${player.token}</em></div>`)
+    .map((player) => `<div class="player-row"><strong>${player.name}</strong><span>${player.cash} kr</span><em>${tokenLabel(player.token) || "Väljer pjäs"}</em></div>`)
     .join("");
+
+  const tokenPanel = document.getElementById("token-status");
+  if (tokenPanel) {
+    tokenPanel.innerHTML = state.tokenChoices
+      .map((token) => `<span class="${token.available ? "available" : "taken"}">${token.label}</span>`)
+      .join("");
+  }
 }
 
 function renderMobile(state) {
-  document.getElementById("mobile-status").textContent = `${state.currentPlayer} har tur. Mockläge är aktivt.`;
+  document.getElementById("mobile-status").textContent =
+    state.phase === "token_selection"
+      ? `${state.currentPlayer} väljer pjäs.`
+      : `${state.currentPlayer} har tur.`;
   document.getElementById("mobile-bank-message").textContent = state.bankMessage;
   document.getElementById("join-button").addEventListener("click", () => {
     const room = document.getElementById("room-input").value || state.roomCode;
     document.getElementById("mobile-status").textContent = `Ansluten till ${room}. Riktiga sessioner kommer i nästa steg.`;
   });
+
+  renderTokenButtons(state);
+  document.getElementById("roll-button").onclick = async () => {
+    const updated = await postAction("/api/game/roll", "");
+    renderMobile(updated);
+  };
+  document.getElementById("new-game-button").onclick = async () => {
+    const updated = await postAction("/api/game/new", "");
+    renderMobile(updated);
+  };
 }
 
 function renderAdmin(state) {
@@ -57,9 +96,43 @@ function renderAdmin(state) {
 
 function tokensAt(players, position) {
   return players
-    .filter((player) => player.position === position)
-    .map((player) => `<span title="${player.name}">${player.token}</span>`)
+    .filter((player) => player.position === position && player.token)
+    .map((player) => `<span title="${player.name}">${tokenIcon(player.token)}</span>`)
     .join("");
+}
+
+function renderTokenButtons(state) {
+  const panel = document.getElementById("token-buttons");
+  panel.innerHTML = state.tokenChoices
+    .map((token) => `<button type="button" data-token="${token.id}" ${token.available ? "" : "disabled"}>${token.label}</button>`)
+    .join("");
+
+  panel.querySelectorAll("button[data-token]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const updated = await postAction("/api/game/select-token", `token=${encodeURIComponent(button.dataset.token)}`);
+      renderMobile(updated);
+    });
+  });
+}
+
+function tokenLabel(token) {
+  return {
+    bil: "Bil",
+    hatt: "Hatt",
+    skepp: "Skepp",
+    hund: "Hund",
+    sko: "Sko",
+  }[token] || "";
+}
+
+function tokenIcon(token) {
+  return {
+    bil: "Bil",
+    hatt: "Hatt",
+    skepp: "Skepp",
+    hund: "Hund",
+    sko: "Sko",
+  }[token] || "?";
 }
 
 function tileClass(index) {
