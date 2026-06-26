@@ -153,10 +153,21 @@ function spaceDetails(space) {
 }
 
 function selectedSpace(state) {
+  if (state.drawnCard) return drawnCardAsSpace(state.drawnCard);
   if (state.pendingOffer) return state.spaces[state.pendingOffer.spaceIndex];
   if (state.auction) return state.spaces[state.auction.spaceIndex];
   const current = state.players.find((player) => player.name === state.currentPlayer) || state.players[0];
   return state.spaces[current?.position || 0];
+}
+
+function drawnCardAsSpace(card) {
+  return {
+    kind: card.deck,
+    name: card.title,
+    cardTitle: card.title,
+    cardText: card.text,
+    cardIcon: card.icon,
+  };
 }
 
 function renderPropertyCard(container, space) {
@@ -196,6 +207,10 @@ function cardIcon(icon) {
     bolt: "EL",
     water: "VA",
     utility: "VE",
+    chance: "CH",
+    community: "AL",
+    jail: "FÄ",
+    tax: "SK",
   }[icon] || "EP";
 }
 

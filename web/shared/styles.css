@@ -403,6 +403,10 @@ textarea {
 .card-blue .card-band { background: #244f9e; }
 .card-station .card-band { background: #d9dadd; }
 .card-utility .card-band { background: #caeee7; }
+.card-chance .card-band { background: #ffd77a; }
+.card-community .card-band { background: #d5e5ff; }
+.card-jail .card-band { background: #d8f0dc; }
+.card-tax .card-band { background: #f2c9c1; }
 
 .event-list {
   display: grid;

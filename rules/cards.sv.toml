@@ -1,0 +1,49 @@
+[[chance]]
+id = "chance_go"
+title = "Chans"
+text = "Ta en genväg genom stan. Gå direkt till Gå och inkassera 2000 kr."
+icon = "chance"
+effect = "move_to"
+target = 0
+amount = 2000
+
+[[chance]]
+id = "chance_bank_fee"
+title = "Chans"
+text = "Banken tar ut en oväntad serviceavgift. Betala 500 kr."
+icon = "chance"
+effect = "pay_money"
+amount = 500
+
+[[chance]]
+id = "chance_jail"
+title = "Chans"
+text = "Du råkar gå vilse vid stationen. Gå direkt till fängelse."
+icon = "jail"
+effect = "go_to_jail"
+target = 10
+
+[[community]]
+id = "community_bonus"
+title = "Allmänning"
+text = "Du får lokal bonus från kvarteret. Inkassera 1000 kr."
+icon = "community"
+effect = "gain_money"
+amount = 1000
+
+[[community]]
+id = "community_repairs"
+title = "Allmänning"
+text = "Du hjälper till med gemensamt underhåll. Betala 800 kr."
+icon = "community"
+effect = "pay_money"
+amount = 800
+
+[[community]]
+id = "community_go"
+title = "Allmänning"
+text = "Gå tillbaka till start och samla ihop dig. Gå till Gå och inkassera 2000 kr."
+icon = "community"
+effect = "move_to"
+target = 0
+amount = 2000

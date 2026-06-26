@@ -14,6 +14,7 @@ const STYLES_CSS: &str = include_str!("../../web/shared/styles.css");
 const APP_JS: &str = include_str!("../../web/shared/app.js");
 const DEFAULT_PREPROMPT: &str = include_str!("../../prompts/supergemma.bank.sv.md");
 const BOARD_TOML: &str = include_str!("../../rules/board.lindesberg.toml");
+const CARDS_TOML: &str = include_str!("../../rules/cards.sv.toml");
 const SETTINGS_PATH: &str = "data/settings.toml";
 const DEFAULT_MODEL: &str = "supergemma";
 
@@ -61,11 +62,36 @@ struct AuctionState {
     highest_bidder: Option<usize>,
 }
 
+#[derive(Clone)]
+struct GameCard {
+    deck: String,
+    id: String,
+    title: String,
+    text: String,
+    icon: String,
+    effect: String,
+    amount: Option<i32>,
+    target: Option<usize>,
+}
+
+#[derive(Clone)]
+struct DrawnCard {
+    deck: String,
+    id: String,
+    title: String,
+    text: String,
+    icon: String,
+}
+
 struct GameState {
     room_code: String,
     phase: Phase,
     players: Vec<Player>,
     spaces: Vec<BoardSpace>,
+    chance_cards: Vec<GameCard>,
+    community_cards: Vec<GameCard>,
+    next_chance: usize,
+    next_community: usize,
     owners: Vec<Option<usize>>,
     selection_order: Vec<usize>,
     selection_cursor: usize,
@@ -73,6 +99,7 @@ struct GameState {
     dice: [u8; 2],
     pending_offer: Option<PendingOffer>,
     auction: Option<AuctionState>,
+    drawn_card: Option<DrawnCard>,
     events: Vec<String>,
     bank_message: String,
 }
@@ -245,6 +272,7 @@ impl Settings {
 impl GameState {
     fn new() -> Self {
         let spaces = parse_board_spaces(BOARD_TOML);
+        let (chance_cards, community_cards) = parse_game_cards(CARDS_TOML);
         let owners = vec![None; spaces.len()];
         let players = vec![
             Player::new("Anna"),
@@ -264,6 +292,10 @@ impl GameState {
             phase: Phase::TokenSelection,
             players,
             spaces,
+            chance_cards,
+            community_cards,
+            next_chance: 0,
+            next_community: 0,
             owners,
             selection_order,
             selection_cursor: 0,
@@ -271,6 +303,7 @@ impl GameState {
             dice: [0, 0],
             pending_offer: None,
             auction: None,
+            drawn_card: None,
             events: vec![format!("{first_name} börjar och väljer pjäs först.")],
             bank_message: format!(
                 "{first_name} börjar och väljer pjäs först. Välj en av de fem klassiska pjäserna."
@@ -337,6 +370,7 @@ impl GameState {
         }
 
         self.dice = [random_die(), random_die()];
+        self.drawn_card = None;
         let steps = (self.dice[0] + self.dice[1]) as usize;
         let player = &mut self.players[self.current_player_index];
         let old_position = player.position;
@@ -416,6 +450,10 @@ impl GameState {
             ));
             self.push_event(format!("{player_name} gick direkt till {target_name}."));
             force_end_turn = true;
+        } else if landed.kind == "chance" || landed.kind == "community" {
+            if self.draw_and_apply_card(&landed.kind, &player_name) {
+                force_end_turn = true;
+            }
         }
 
         if force_end_turn {
@@ -551,6 +589,103 @@ impl GameState {
         self.finish_turn_after_roll();
     }
 
+    fn draw_and_apply_card(&mut self, deck: &str, player_name: &str) -> bool {
+        let Some(card) = self.next_card(deck) else {
+            self.bank_message
+                .push_str(" Kortleken är tom, så inget händer.");
+            return false;
+        };
+
+        self.drawn_card = Some(DrawnCard {
+            deck: card.deck.clone(),
+            id: card.id.clone(),
+            title: card.title.clone(),
+            text: card.text.clone(),
+            icon: card.icon.clone(),
+        });
+        self.bank_message
+            .push_str(&format!(" {}: {}", card.title, card.text));
+        self.push_event(format!("{player_name} drog kort: {}", card.text));
+        self.apply_card_effect(&card)
+    }
+
+    fn next_card(&mut self, deck: &str) -> Option<GameCard> {
+        if deck == "chance" {
+            if self.chance_cards.is_empty() {
+                return None;
+            }
+            let card = self.chance_cards[self.next_chance % self.chance_cards.len()].clone();
+            self.next_chance += 1;
+            Some(card)
+        } else {
+            if self.community_cards.is_empty() {
+                return None;
+            }
+            let card =
+                self.community_cards[self.next_community % self.community_cards.len()].clone();
+            self.next_community += 1;
+            Some(card)
+        }
+    }
+
+    fn apply_card_effect(&mut self, card: &GameCard) -> bool {
+        let player_index = self.current_player_index;
+        match card.effect.as_str() {
+            "gain_money" => {
+                let amount = card.amount.unwrap_or(0);
+                self.players[player_index].cash += amount;
+                self.push_event(format!(
+                    "{} fick {} kr.",
+                    self.players[player_index].name, amount
+                ));
+                false
+            }
+            "pay_money" => {
+                let amount = card.amount.unwrap_or(0);
+                self.players[player_index].cash -= amount;
+                self.push_event(format!(
+                    "{} betalade {} kr.",
+                    self.players[player_index].name, amount
+                ));
+                false
+            }
+            "move_to" => {
+                let target = card.target.unwrap_or(0);
+                let old_position = self.players[player_index].position;
+                if target <= old_position {
+                    self.players[player_index].cash += card.amount.unwrap_or(0);
+                }
+                self.players[player_index].position = target;
+                let target_name = self
+                    .spaces
+                    .get(target)
+                    .map(|space| space.name.clone())
+                    .unwrap_or_else(|| "Gå".to_string());
+                self.push_event(format!(
+                    "{} flyttade till {}.",
+                    self.players[player_index].name, target_name
+                ));
+                false
+            }
+            "go_to_jail" => {
+                let target = card.target.unwrap_or(10);
+                self.players[player_index].position = target;
+                self.players[player_index].jailed = true;
+                let target_name = self
+                    .spaces
+                    .get(target)
+                    .map(|space| space.name.clone())
+                    .unwrap_or_else(|| "Fängelse".to_string());
+                self.push_event(format!(
+                    "{} gick direkt till {}.",
+                    self.players[player_index].name, target_name
+                ));
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn finish_turn_after_roll(&mut self) {
         if self.dice[0] == self.dice[1] {
             self.bank_message
@@ -641,7 +776,7 @@ impl GameState {
             .join(",");
 
         format!(
-            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"pendingOffer\":{},\"auction\":{},\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}]}}",
+            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}]}}",
             escape_json(&self.room_code),
             self.phase.as_str(),
             escape_json(current),
@@ -650,6 +785,7 @@ impl GameState {
             self.dice[1],
             self.pending_offer_json(),
             self.auction_json(),
+            self.drawn_card_json(),
             players,
             token_choices,
             spaces,
@@ -692,6 +828,20 @@ impl GameState {
             highest_bidder,
             next_bid,
             escape_json(&self.players[auction.seller_turn_index].name)
+        )
+    }
+
+    fn drawn_card_json(&self) -> String {
+        let Some(card) = &self.drawn_card else {
+            return "null".to_string();
+        };
+        format!(
+            "{{\"deck\":\"{}\",\"id\":\"{}\",\"title\":\"{}\",\"text\":\"{}\",\"icon\":\"{}\"}}",
+            escape_json(&card.deck),
+            escape_json(&card.id),
+            escape_json(&card.title),
+            escape_json(&card.text),
+            escape_json(&card.icon)
         )
     }
 }
@@ -869,6 +1019,88 @@ fn parse_board_spaces(toml: &str) -> Vec<BoardSpace> {
 
     spaces.sort_by_key(|space| space.index);
     spaces
+}
+
+fn parse_game_cards(toml: &str) -> (Vec<GameCard>, Vec<GameCard>) {
+    let mut chance = Vec::new();
+    let mut community = Vec::new();
+    let mut current_deck = String::new();
+    let mut current = Vec::new();
+
+    for line in toml.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[[chance]]" || trimmed == "[[community]]" {
+            if !current.is_empty() {
+                push_card_block(&mut chance, &mut community, &current_deck, &current);
+                current.clear();
+            }
+            current_deck = trimmed
+                .trim_start_matches("[[")
+                .trim_end_matches("]]")
+                .to_string();
+        } else if !trimmed.is_empty() {
+            current.push(line.to_string());
+        }
+    }
+
+    if !current.is_empty() {
+        push_card_block(&mut chance, &mut community, &current_deck, &current);
+    }
+
+    (chance, community)
+}
+
+fn push_card_block(
+    chance: &mut Vec<GameCard>,
+    community: &mut Vec<GameCard>,
+    deck: &str,
+    lines: &[String],
+) {
+    let card = parse_card_block(deck, lines);
+    if deck == "chance" {
+        chance.push(card);
+    } else {
+        community.push(card);
+    }
+}
+
+fn parse_card_block(deck: &str, lines: &[String]) -> GameCard {
+    let mut id = String::new();
+    let mut title = String::new();
+    let mut text = String::new();
+    let mut icon = deck.to_string();
+    let mut effect = String::new();
+    let mut amount = None;
+    let mut target = None;
+
+    for line in lines {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        match key {
+            "id" => id = trim_toml_quotes(value).to_string(),
+            "title" => title = trim_toml_quotes(value).to_string(),
+            "text" => text = trim_toml_quotes(value).to_string(),
+            "icon" => icon = trim_toml_quotes(value).to_string(),
+            "effect" => effect = trim_toml_quotes(value).to_string(),
+            "amount" => amount = value.parse().ok(),
+            "target" => target = value.parse().ok(),
+            _ => {}
+        }
+    }
+
+    GameCard {
+        deck: deck.to_string(),
+        id,
+        title,
+        text,
+        icon,
+        effect,
+        amount,
+        target,
+    }
 }
 
 fn parse_space_block(lines: &[String]) -> BoardSpace {
