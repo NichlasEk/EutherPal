@@ -54,7 +54,7 @@ function renderTv(state) {
     tile.className = `tile ${tileClass(space, index)}`;
     tile.style.gridArea = gridAreaForBoardIndex(index);
     tile.tabIndex = 0;
-    tile.innerHTML = `<span class="tile-index">${index}</span><strong>${space.name}</strong>${spaceDetails(space)}<div class="tokens">${tokensAt(state.players, index)}</div>`;
+    tile.innerHTML = `<span class="tile-index">${index}</span><strong>${space.name}</strong>${spaceDetails(space)}${buildingMarkers(space)}<div class="tokens">${tokensAt(state.players, index)}</div>`;
     board.appendChild(tile);
   });
 
@@ -92,6 +92,7 @@ function renderMobile(state) {
   renderEvents(document.getElementById("mobile-events"), state.events);
   renderOfferControls(state);
   renderAuctionControls(state);
+  renderBuildControls(state);
   document.getElementById("roll-button").onclick = async () => {
     const updated = await postAction("/api/game/roll", "");
     renderMobile(updated);
@@ -147,8 +148,9 @@ async function renderSettings() {
 }
 
 function spaceDetails(space) {
-  if (space.owner) return `<small>Ägs: ${space.owner}</small>`;
-  if (space.price) return `<small>${space.price} kr</small>`;
+  const rent = space.currentRent || space.rent;
+  if (space.owner) return `<small>Ägs: ${space.owner}${rent ? ` · Hyra ${rent}` : ""}</small>`;
+  if (space.price) return `<small>${space.price} kr${rent ? ` · Hyra ${rent}` : ""}</small>`;
   return "";
 }
 
@@ -176,7 +178,9 @@ function renderPropertyCard(container, space) {
   const icon = space.cardIcon || space.kind;
   const meta = [
     space.price ? `Pris ${space.price} kr` : "",
-    space.rent ? `Hyra ${space.rent} kr` : "",
+    space.currentRent ? `Hyra ${space.currentRent} kr` : space.rent ? `Hyra ${space.rent} kr` : "",
+    space.buildCost ? `Bygg ${space.buildCost} kr` : "",
+    space.buildings ? `Nivå ${buildingLabel(space.buildings)}` : "",
     space.amount ? `Belopp ${space.amount} kr` : "",
     space.owner ? `Ägare ${space.owner}` : "",
   ].filter(Boolean);
@@ -277,6 +281,44 @@ function renderAuctionControls(state) {
   };
 }
 
+function renderBuildControls(state) {
+  const panel = document.getElementById("build-panel");
+  const buildButton = document.getElementById("build-button");
+  if (!panel || !buildButton) return;
+
+  const options = state.buildableProperties || [];
+  buildButton.disabled = options.length === 0 || !options.some((option) => option.canBuild);
+
+  if (options.length === 0) {
+    panel.innerHTML = "";
+    buildButton.textContent = "Bygg";
+    buildButton.onclick = null;
+    return;
+  }
+
+  panel.innerHTML = `<h3>Byggnader</h3>${options
+    .map((option) => `<button type="button" data-build="${option.spaceIndex}" ${option.canBuild ? "" : "disabled"}><strong>${option.spaceName}</strong><span>${option.label} → ${option.nextLabel}</span><em>${option.buildCost} kr · ny hyra ${option.rentAfter} kr</em></button>`)
+    .join("")}`;
+
+  panel.querySelectorAll("button[data-build]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const body = new URLSearchParams({ spaceIndex: button.dataset.build });
+      const updated = await postAction("/api/game/build", body.toString());
+      renderMobile(updated);
+    });
+  });
+
+  const first = options.find((option) => option.canBuild);
+  buildButton.textContent = first ? `Bygg ${first.spaceName}` : "Bygg";
+  buildButton.onclick = first
+    ? async () => {
+        const body = new URLSearchParams({ spaceIndex: first.spaceIndex });
+        const updated = await postAction("/api/game/build", body.toString());
+        renderMobile(updated);
+      }
+    : null;
+}
+
 function renderTokenButtons(state) {
   const panel = document.getElementById("token-buttons");
   panel.innerHTML = state.tokenChoices
@@ -289,6 +331,23 @@ function renderTokenButtons(state) {
       renderMobile(updated);
     });
   });
+}
+
+function buildingMarkers(space) {
+  if (!space.buildings) return "";
+  if (space.buildings >= 5) return `<div class="buildings hotel"><span>H</span></div>`;
+  return `<div class="buildings">${Array.from({ length: space.buildings }, () => "<span></span>").join("")}</div>`;
+}
+
+function buildingLabel(level) {
+  return {
+    0: "ingen byggnad",
+    1: "1 hus",
+    2: "2 hus",
+    3: "3 hus",
+    4: "4 hus",
+    5: "hotell",
+  }[level] || "hotell";
 }
 
 function tokenLabel(token) {

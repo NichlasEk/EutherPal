@@ -209,6 +209,34 @@ textarea {
   text-align: center;
 }
 
+.buildings {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  min-height: 12px;
+}
+
+.buildings span {
+  display: block;
+  width: 10px;
+  height: 8px;
+  border: 1px solid #0f4c2d;
+  border-radius: 2px 2px 0 0;
+  background: #2f9d5b;
+}
+
+.buildings.hotel span {
+  width: 22px;
+  height: 12px;
+  border-color: #7d1f1f;
+  background: #c23535;
+  color: white;
+  font-size: 0.52rem;
+  font-weight: 900;
+  line-height: 10px;
+  text-align: center;
+}
+
 .corner {
   background: #d8f0dc;
 }
@@ -457,11 +485,13 @@ textarea {
   margin: 10px 0;
 }
 
-.auction-panel:empty {
+.auction-panel:empty,
+.build-panel:empty {
   display: none;
 }
 
-.auction-panel h3 {
+.auction-panel h3,
+.build-panel h3 {
   margin: 0;
   font-size: 1.05rem;
 }
@@ -487,6 +517,29 @@ textarea {
   min-width: 76px;
 }
 
+.build-panel {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.build-panel button {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px;
+  min-height: 62px;
+  padding: 8px;
+  text-align: left;
+}
+
+.build-panel button span,
+.build-panel button em {
+  color: #4c514a;
+  font-size: 0.8rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
 .token-buttons,
 .token-status {
   display: grid;
@@ -506,7 +559,8 @@ textarea {
   color: #69635c;
 }
 
-.action-grid button:disabled {
+.action-grid button:disabled,
+.build-panel button:disabled {
   border-color: #a8a097;
   background: #d8d2c6;
   color: #69635c;

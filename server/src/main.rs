@@ -43,6 +43,8 @@ struct BoardSpace {
     color: Option<String>,
     price: Option<i32>,
     rent: Option<i32>,
+    build_cost: Option<i32>,
+    house_rents: Vec<i32>,
     amount: Option<i32>,
     target: Option<usize>,
     card_title: Option<String>,
@@ -93,6 +95,7 @@ struct GameState {
     next_chance: usize,
     next_community: usize,
     owners: Vec<Option<usize>>,
+    buildings: Vec<u8>,
     selection_order: Vec<usize>,
     selection_cursor: usize,
     current_player_index: usize,
@@ -208,6 +211,15 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
             game.decline_pending_property();
             json(200, &game.to_json())
         }
+        ("POST", "/api/game/build") => {
+            let space_index = form_value(&body, "spaceIndex")
+                .or_else(|| query_value(query, "spaceIndex"))
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(usize::MAX);
+            let mut game = game.lock().expect("game state lock");
+            game.build_property(space_index);
+            json(200, &game.to_json())
+        }
         ("POST", "/api/game/auction/bid") => {
             let player = form_value(&body, "player")
                 .or_else(|| query_value(query, "player"))
@@ -274,6 +286,7 @@ impl GameState {
         let spaces = parse_board_spaces(BOARD_TOML);
         let (chance_cards, community_cards) = parse_game_cards(CARDS_TOML);
         let owners = vec![None; spaces.len()];
+        let buildings = vec![0; spaces.len()];
         let players = vec![
             Player::new("Anna"),
             Player::new("Bo"),
@@ -297,6 +310,7 @@ impl GameState {
             next_chance: 0,
             next_community: 0,
             owners,
+            buildings,
             selection_order,
             selection_cursor: 0,
             current_player_index: first,
@@ -406,7 +420,7 @@ impl GameState {
                     return;
                 }
                 Some(owner_index) if owner_index != self.current_player_index => {
-                    let rent = landed.rent.unwrap_or(0);
+                    let rent = self.rent_for_space(landed_index);
                     let payer_name = self.players[self.current_player_index].name.clone();
                     let owner_name = self.players[owner_index].name.clone();
                     self.players[self.current_player_index].cash -= rent;
@@ -589,6 +603,110 @@ impl GameState {
         self.finish_turn_after_roll();
     }
 
+    fn build_property(&mut self, space_index: usize) {
+        if self.phase != Phase::Play {
+            self.bank_message = "Byggande kan bara göras när spelet är igång.".to_string();
+            return;
+        }
+        if self.pending_offer.is_some() || self.auction.is_some() {
+            self.bank_message = "Avsluta köpfråga eller auktion innan du bygger.".to_string();
+            return;
+        }
+        if space_index >= self.spaces.len() {
+            self.bank_message = "Välj en giltig gata att bygga på.".to_string();
+            return;
+        }
+
+        let player_index = self.current_player_index;
+        let Some(error) = self.build_error(player_index, space_index) else {
+            let level = self.buildings[space_index] + 1;
+            let cost = self.spaces[space_index].build_cost.unwrap_or(0);
+            let player_name = self.players[player_index].name.clone();
+            let space_name = self.spaces[space_index].name.clone();
+            self.players[player_index].cash -= cost;
+            self.buildings[space_index] = level;
+            let label = building_label(level);
+            self.bank_message =
+                format!("{player_name} bygger {label} på {space_name} för {cost} kr.");
+            self.push_event(format!(
+                "{player_name} byggde {label} på {space_name} för {cost} kr."
+            ));
+            return;
+        };
+
+        self.bank_message = error;
+    }
+
+    fn build_error(&self, player_index: usize, space_index: usize) -> Option<String> {
+        let Some(space) = self.spaces.get(space_index) else {
+            return Some("Välj en giltig gata att bygga på.".to_string());
+        };
+        if space.kind != "property" {
+            return Some("Det går bara att bygga på gator, inte stationer eller verk.".to_string());
+        }
+        if self.owners.get(space_index).and_then(|owner| *owner) != Some(player_index) {
+            return Some(format!("{} ägs inte av aktuell spelare.", space.name));
+        }
+        let Some(color) = space.color.as_deref() else {
+            return Some("Gatan saknar färggrupp och kan inte byggas på.".to_string());
+        };
+        let group = self.color_group_indices(color);
+        if group.is_empty()
+            || !group
+                .iter()
+                .all(|index| self.owners[*index] == Some(player_index))
+        {
+            return Some(format!(
+                "Du måste äga hela {}-gruppen innan du bygger.",
+                color_group_label(color)
+            ));
+        }
+        let level = self.buildings[space_index];
+        if level >= 5 {
+            return Some(format!("{} har redan hotell.", space.name));
+        }
+        let min_level = group
+            .iter()
+            .map(|index| self.buildings[*index])
+            .min()
+            .unwrap_or(0);
+        if level > min_level {
+            return Some("Bygg jämnt i färggruppen innan nästa nivå.".to_string());
+        }
+        let cost = space.build_cost.unwrap_or(0);
+        if cost <= 0 {
+            return Some("Gatan saknar byggkostnad i TOML-reglerna.".to_string());
+        }
+        if self.players[player_index].cash < cost {
+            return Some(format!(
+                "{} har inte råd att bygga för {} kr.",
+                self.players[player_index].name, cost
+            ));
+        }
+        None
+    }
+
+    fn color_group_indices(&self, color: &str) -> Vec<usize> {
+        self.spaces
+            .iter()
+            .filter(|space| space.kind == "property" && space.color.as_deref() == Some(color))
+            .map(|space| space.index)
+            .collect()
+    }
+
+    fn rent_for_space(&self, space_index: usize) -> i32 {
+        let space = &self.spaces[space_index];
+        let level = self.buildings[space_index] as usize;
+        if level > 0 {
+            return space
+                .house_rents
+                .get(level.saturating_sub(1))
+                .copied()
+                .unwrap_or_else(|| space.rent.unwrap_or(0));
+        }
+        space.rent.unwrap_or(0)
+    }
+
     fn draw_and_apply_card(&mut self, deck: &str, player_name: &str) -> bool {
         let Some(card) = self.next_card(deck) else {
             self.bank_message
@@ -734,14 +852,24 @@ impl GameState {
                 let owner = self.owners[space.index]
                     .map(|owner| format!("\"{}\"", escape_json(&self.players[owner].name)))
                     .unwrap_or_else(|| "null".to_string());
+                let rent_tiers = space
+                    .house_rents
+                    .iter()
+                    .map(|rent| rent.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
                 format!(
-                    "{{\"index\":{},\"kind\":\"{}\",\"name\":\"{}\",\"color\":{},\"price\":{},\"rent\":{},\"amount\":{},\"target\":{},\"owner\":{},\"cardTitle\":{},\"cardText\":{},\"cardIcon\":{}}}",
+                    "{{\"index\":{},\"kind\":\"{}\",\"name\":\"{}\",\"color\":{},\"price\":{},\"rent\":{},\"currentRent\":{},\"buildCost\":{},\"buildings\":{},\"rentTiers\":[{}],\"amount\":{},\"target\":{},\"owner\":{},\"cardTitle\":{},\"cardText\":{},\"cardIcon\":{}}}",
                     space.index,
                     escape_json(&space.kind),
                     escape_json(&space.name),
                     optional_json_string(space.color.as_deref()),
                     optional_json_number(space.price),
                     optional_json_number(space.rent),
+                    self.rent_for_space(space.index),
+                    optional_json_number(space.build_cost),
+                    self.buildings[space.index],
+                    rent_tiers,
                     optional_json_number(space.amount),
                     optional_json_usize(space.target),
                     owner,
@@ -776,7 +904,7 @@ impl GameState {
             .join(",");
 
         format!(
-            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}]}}",
+            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}]}}",
             escape_json(&self.room_code),
             self.phase.as_str(),
             escape_json(current),
@@ -786,6 +914,7 @@ impl GameState {
             self.pending_offer_json(),
             self.auction_json(),
             self.drawn_card_json(),
+            self.buildable_properties_json(),
             players,
             token_choices,
             spaces,
@@ -829,6 +958,46 @@ impl GameState {
             next_bid,
             escape_json(&self.players[auction.seller_turn_index].name)
         )
+    }
+
+    fn buildable_properties_json(&self) -> String {
+        if self.phase != Phase::Play || self.pending_offer.is_some() || self.auction.is_some() {
+            return String::new();
+        }
+
+        let player_index = self.current_player_index;
+        self.spaces
+            .iter()
+            .filter(|space| space.kind == "property" && self.owners[space.index] == Some(player_index))
+            .map(|space| {
+                let level = self.buildings[space.index];
+                let next_level = if level < 5 { level + 1 } else { level };
+                let can_build = self.build_error(player_index, space.index).is_none();
+                let cost = space.build_cost.unwrap_or(0);
+                let rent_after = if level < 5 {
+                    space
+                        .house_rents
+                        .get(level as usize)
+                        .copied()
+                        .unwrap_or_else(|| self.rent_for_space(space.index))
+                } else {
+                    self.rent_for_space(space.index)
+                };
+                format!(
+                    "{{\"spaceIndex\":{},\"spaceName\":\"{}\",\"level\":{},\"nextLevel\":{},\"label\":\"{}\",\"nextLabel\":\"{}\",\"buildCost\":{},\"rentAfter\":{},\"canBuild\":{}}}",
+                    space.index,
+                    escape_json(&space.name),
+                    level,
+                    next_level,
+                    escape_json(building_label(level)),
+                    escape_json(building_label(next_level)),
+                    cost,
+                    rent_after,
+                    can_build
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",")
     }
 
     fn drawn_card_json(&self) -> String {
@@ -1110,6 +1279,8 @@ fn parse_space_block(lines: &[String]) -> BoardSpace {
     let mut color = None;
     let mut price = None;
     let mut rent = None;
+    let mut build_cost = None;
+    let mut house_rents = Vec::new();
     let mut amount = None;
     let mut target = None;
     let mut card_title = None;
@@ -1129,6 +1300,8 @@ fn parse_space_block(lines: &[String]) -> BoardSpace {
             "color" => color = Some(trim_toml_quotes(value).to_string()),
             "price" => price = value.parse().ok(),
             "rent" => rent = value.parse().ok(),
+            "build_cost" => build_cost = value.parse().ok(),
+            "house_rents" => house_rents = parse_toml_i32_list(value),
             "amount" => amount = value.parse().ok(),
             "target" => target = value.parse().ok(),
             "card_title" => card_title = Some(trim_toml_quotes(value).to_string()),
@@ -1145,6 +1318,8 @@ fn parse_space_block(lines: &[String]) -> BoardSpace {
         color,
         price,
         rent,
+        build_cost,
+        house_rents,
         amount,
         target,
         card_title,
@@ -1158,6 +1333,19 @@ fn trim_toml_quotes(value: &str) -> &str {
         .strip_prefix('"')
         .and_then(|value| value.strip_suffix('"'))
         .unwrap_or(value)
+}
+
+fn parse_toml_i32_list(value: &str) -> Vec<i32> {
+    value
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .map(|inner| {
+            inner
+                .split(',')
+                .filter_map(|part| part.trim().parse::<i32>().ok())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn load_settings() -> Settings {
@@ -1219,6 +1407,31 @@ fn token_label(token: &str) -> &'static str {
         .unwrap_or("pjäsen")
 }
 
+fn building_label(level: u8) -> &'static str {
+    match level {
+        0 => "ingen byggnad",
+        1 => "1 hus",
+        2 => "2 hus",
+        3 => "3 hus",
+        4 => "4 hus",
+        _ => "hotell",
+    }
+}
+
+fn color_group_label(color: &str) -> &'static str {
+    match color {
+        "brown" => "bruna",
+        "light_blue" => "ljusblå",
+        "pink" => "rosa",
+        "orange" => "orange",
+        "red" => "röda",
+        "yellow" => "gula",
+        "green" => "gröna",
+        "blue" => "blå",
+        _ => "färg",
+    }
+}
+
 fn random_index(max: usize) -> usize {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1229,4 +1442,48 @@ fn random_index(max: usize) -> usize {
 
 fn random_die() -> u8 {
     (random_index(6) + 1) as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn playable_game() -> GameState {
+        let mut game = GameState::new();
+        game.phase = Phase::Play;
+        game.current_player_index = 0;
+        game
+    }
+
+    #[test]
+    fn builds_house_when_player_owns_complete_color_group() {
+        let mut game = playable_game();
+        game.owners[1] = Some(0);
+        game.owners[3] = Some(0);
+        let cash_before = game.players[0].cash;
+
+        game.build_property(1);
+
+        assert_eq!(game.buildings[1], 1);
+        assert_eq!(game.players[0].cash, cash_before - 500);
+        assert_eq!(game.rent_for_space(1), 100);
+        assert!(game.bank_message.contains("bygger 1 hus"));
+    }
+
+    #[test]
+    fn requires_even_building_inside_color_group() {
+        let mut game = playable_game();
+        for index in [6, 8, 9] {
+            game.owners[index] = Some(0);
+        }
+
+        game.build_property(6);
+        game.build_property(6);
+
+        assert_eq!(game.buildings[6], 1);
+        assert!(game.bank_message.contains("Bygg jämnt"));
+
+        game.build_property(8);
+        assert_eq!(game.buildings[8], 1);
+    }
 }
