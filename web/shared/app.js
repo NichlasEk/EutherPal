@@ -135,6 +135,7 @@ function renderAdmin(state) {
       document.getElementById("admin-ai").textContent = health.ai;
     });
   document.getElementById("admin-room").textContent = state.roomCode;
+  renderAdminTools(state);
   renderBankChat(document.getElementById("admin-bank-chat"), state.bankChat);
   bindAdminBankChat();
 }
@@ -252,6 +253,43 @@ function bindAdminBankChat() {
     if (!message) return;
     input.value = "";
     const updated = await postAction("/api/bank/admin-message", new URLSearchParams({ message }).toString());
+    renderAdmin(updated);
+  };
+}
+
+function renderAdminTools(state) {
+  const status = document.getElementById("admin-tools-status");
+  const playerSelect = document.getElementById("admin-adjust-player");
+  if (!playerSelect) return;
+  playerSelect.innerHTML = state.players
+    .map((player) => `<option value="${escapeHtml(player.name)}">${escapeHtml(player.name)}</option>`)
+    .join("");
+
+  bindAdminToolButton("admin-save-game", "/api/game/save", status, "Sparat");
+  bindAdminToolButton("admin-load-game", "/api/game/load", status, "Laddat");
+  bindAdminToolButton("admin-demo-game", "/api/game/demo", status, "Demo laddad");
+  bindAdminToolButton("admin-new-game", "/api/game/new", status, "Nollställt");
+
+  const form = document.getElementById("admin-adjust-form");
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const body = new URLSearchParams({
+      player: playerSelect.value,
+      cashDelta: document.getElementById("admin-cash-delta").value || "0",
+      position: document.getElementById("admin-position").value || "",
+    });
+    const updated = await postAction("/api/game/admin-adjust", body.toString());
+    if (status) status.textContent = "Justerat";
+    renderAdmin(updated);
+  };
+}
+
+function bindAdminToolButton(id, path, status, label) {
+  const button = document.getElementById(id);
+  if (!button) return;
+  button.onclick = async () => {
+    const updated = await postAction(path, "");
+    if (status) status.textContent = label;
     renderAdmin(updated);
   };
 }

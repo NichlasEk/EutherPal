@@ -27,6 +27,28 @@
       </section>
 
       <section class="control-panel">
+        <h2>Testverktyg</h2>
+        <div class="admin-actions">
+          <button id="admin-save-game" type="button">Spara spel</button>
+          <button id="admin-load-game" type="button">Ladda spel</button>
+          <button id="admin-demo-game" type="button">Demo-seed</button>
+          <button id="admin-new-game" type="button">Nollställ</button>
+        </div>
+        <form id="admin-adjust-form" class="settings-form compact-form">
+          <label for="admin-adjust-player">Spelare</label>
+          <select id="admin-adjust-player"></select>
+          <label for="admin-cash-delta">Pengajustering</label>
+          <input id="admin-cash-delta" type="number" value="0" step="100">
+          <label for="admin-position">Position</label>
+          <input id="admin-position" type="number" min="0" max="39" placeholder="0-39">
+          <div class="settings-actions">
+            <button type="submit">Justera</button>
+            <span id="admin-tools-status">-</span>
+          </div>
+        </form>
+      </section>
+
+      <section class="control-panel">
         <h2>LLM-profil</h2>
         <form id="settings-form" class="settings-form">
           <label for="model-select">Modell</label>

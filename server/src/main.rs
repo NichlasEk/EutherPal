@@ -16,6 +16,7 @@ const DEFAULT_PREPROMPT: &str = include_str!("../../prompts/supergemma.bank.sv.m
 const BOARD_TOML: &str = include_str!("../../rules/board.lindesberg.toml");
 const CARDS_TOML: &str = include_str!("../../rules/cards.sv.toml");
 const SETTINGS_PATH: &str = "data/settings.toml";
+const GAME_STATE_PATH: &str = "data/game-state.json";
 const DEFAULT_MODEL: &str = "supergemma";
 const DEFAULT_PLAYER_COUNT: usize = 4;
 const MIN_PLAYER_COUNT: usize = 2;
@@ -205,6 +206,55 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .unwrap_or(DEFAULT_PLAYER_COUNT);
             let mut game = game.lock().expect("game state lock");
             *game = GameState::new_with_player_count(player_count);
+            json(200, &game.to_json())
+        }
+        ("POST", "/api/game/save") => {
+            let mut game = game.lock().expect("game state lock");
+            match game.save_to_disk() {
+                Ok(()) => {
+                    game.bank_message = format!("Spelet sparades till {GAME_STATE_PATH}.");
+                    game.push_event("Spelet sparades.".to_string());
+                    json(200, &game.to_json())
+                }
+                Err(error) => json(
+                    500,
+                    &format!("{{\"error\":\"{}\"}}", escape_json(&error.to_string())),
+                ),
+            }
+        }
+        ("POST", "/api/game/load") => {
+            let mut game = game.lock().expect("game state lock");
+            match GameState::load_from_disk() {
+                Ok(loaded) => {
+                    *game = loaded;
+                    game.bank_message = format!("Spelet laddades från {GAME_STATE_PATH}.");
+                    game.push_event("Spelet laddades.".to_string());
+                    json(200, &game.to_json())
+                }
+                Err(error) => json(
+                    500,
+                    &format!("{{\"error\":\"{}\"}}", escape_json(&error.to_string())),
+                ),
+            }
+        }
+        ("POST", "/api/game/demo") => {
+            let mut game = game.lock().expect("game state lock");
+            *game = GameState::demo();
+            json(200, &game.to_json())
+        }
+        ("POST", "/api/game/admin-adjust") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
+            let cash_delta = form_value(&body, "cashDelta")
+                .or_else(|| query_value(query, "cashDelta"))
+                .and_then(|value| value.parse::<i32>().ok())
+                .unwrap_or(0);
+            let position = form_value(&body, "position")
+                .or_else(|| query_value(query, "position"))
+                .and_then(|value| value.parse::<usize>().ok());
+            let mut game = game.lock().expect("game state lock");
+            game.admin_adjust_player(&player, cash_delta, position);
             json(200, &game.to_json())
         }
         ("POST", "/api/game/select-token") => {
@@ -429,6 +479,259 @@ impl GameState {
                 "{first_name} börjar och väljer pjäs först. Välj en av de fem klassiska pjäserna."
             ),
         }
+    }
+
+    fn demo() -> Self {
+        let mut game = Self::new_with_player_count(4);
+        let names = ["Maja", "Noel", "Iris", "Sam"];
+        let tokens = ["bil", "hatt", "skepp", "hund"];
+        for index in 0..game.players.len() {
+            game.players[index].name = names[index].to_string();
+            game.players[index].token = Some(tokens[index].to_string());
+        }
+        game.phase = Phase::Play;
+        game.selection_cursor = game.players.len();
+        game.current_player_index = 0;
+        game.players[0].position = 11;
+        game.players[1].position = 10;
+        game.players[1].jailed = true;
+        game.players[1].jail_turns = 1;
+        game.players[2].position = 5;
+        game.players[3].position = 37;
+        for index in [1, 3, 5, 6, 8, 9] {
+            game.owners[index] = Some(0);
+        }
+        game.owners[12] = Some(1);
+        game.owners[27] = Some(1);
+        game.owners[21] = Some(2);
+        game.owners[23] = Some(2);
+        game.owners[24] = Some(2);
+        game.buildings[1] = 1;
+        game.buildings[3] = 1;
+        game.buildings[21] = 2;
+        game.buildings[23] = 2;
+        game.mortgaged[5] = true;
+        game.dice = [3, 4];
+        game.events = vec![
+            "Demo-läge startat.".to_string(),
+            "Maja äger bruna gruppen och Lindesberg C är intecknad.".to_string(),
+            "Noel sitter i fängelse.".to_string(),
+        ];
+        game.bank_message =
+            "Demo-läge är laddat. Testa inteckning, fängelse, byggnader och bankchatt.".to_string();
+        game.bank_chat = vec![BankChatMessage {
+            speaker: "Banken".to_string(),
+            text: "Demo-läge laddat. Jag kan hjälpa till med regler och läge.".to_string(),
+            from_bank: true,
+        }];
+        game
+    }
+
+    fn save_to_disk(&self) -> std::io::Result<()> {
+        if let Some(parent) = Path::new(GAME_STATE_PATH).parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let snapshot = self.to_snapshot();
+        let json = format!(
+            "{{\"format\":\"eutherpal-v1\",\"state\":\"{}\"}}\n",
+            escape_json(&snapshot)
+        );
+        fs::write(GAME_STATE_PATH, json)
+    }
+
+    fn load_from_disk() -> std::io::Result<Self> {
+        let json = fs::read_to_string(GAME_STATE_PATH)?;
+        let snapshot = json_string_field(&json, "state").ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "saknar state i sparfilen")
+        })?;
+        Self::from_snapshot(&snapshot).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "kunde inte läsa sparfilen")
+        })
+    }
+
+    fn admin_adjust_player(&mut self, player_name: &str, cash_delta: i32, position: Option<usize>) {
+        let player_name = clean_player_name(player_name);
+        let Some(index) = self
+            .players
+            .iter()
+            .position(|player| player.name == player_name)
+        else {
+            self.bank_message = "Adminjustering misslyckades: okänd spelare.".to_string();
+            return;
+        };
+        self.players[index].cash += cash_delta;
+        if let Some(position) = position {
+            if position < self.spaces.len() {
+                self.players[index].position = position;
+            }
+        }
+        self.players[index].bankrupt = false;
+        let name = self.players[index].name.clone();
+        self.bank_message = format!("Admin justerade {name}: {cash_delta:+} kr.");
+        self.push_event(format!("Admin justerade {name}."));
+    }
+
+    fn to_snapshot(&self) -> String {
+        let mut lines = Vec::new();
+        lines.push(format!(
+            "meta\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.room_code,
+            self.phase.as_str(),
+            self.selection_cursor,
+            self.current_player_index,
+            self.dice[0],
+            self.dice[1],
+            snapshot_escape(&self.bank_message)
+        ));
+        lines.push(format!(
+            "selection\t{}",
+            self.selection_order
+                .iter()
+                .map(|index| index.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+        lines.push(format!(
+            "cards\t{}\t{}",
+            self.next_chance, self.next_community
+        ));
+        if let Some(offer) = &self.pending_offer {
+            lines.push(format!(
+                "pending\t{}\t{}",
+                offer.player_index, offer.space_index
+            ));
+        }
+        if let Some(auction) = &self.auction {
+            lines.push(format!(
+                "auction\t{}\t{}\t{}\t{}",
+                auction.space_index,
+                auction.seller_turn_index,
+                auction.highest_bid,
+                auction
+                    .highest_bidder
+                    .map(|index| index as i32)
+                    .unwrap_or(-1)
+            ));
+        }
+        for player in &self.players {
+            lines.push(format!(
+                "player\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                snapshot_escape(&player.name),
+                player.cash,
+                player.position,
+                snapshot_escape(player.token.as_deref().unwrap_or("")),
+                player.jailed,
+                player.jail_turns,
+                player.bankrupt
+            ));
+        }
+        for index in 0..self.spaces.len() {
+            lines.push(format!(
+                "asset\t{}\t{}\t{}\t{}",
+                index,
+                self.owners[index].map(|owner| owner as i32).unwrap_or(-1),
+                self.buildings[index],
+                self.mortgaged[index]
+            ));
+        }
+        for event in &self.events {
+            lines.push(format!("event\t{}", snapshot_escape(event)));
+        }
+        for message in &self.bank_chat {
+            lines.push(format!(
+                "chat\t{}\t{}\t{}",
+                snapshot_escape(&message.speaker),
+                message.from_bank,
+                snapshot_escape(&message.text)
+            ));
+        }
+        lines.join("\n")
+    }
+
+    fn from_snapshot(snapshot: &str) -> Option<Self> {
+        let player_count = snapshot
+            .lines()
+            .filter(|line| line.starts_with("player\t"))
+            .count()
+            .clamp(MIN_PLAYER_COUNT, MAX_PLAYER_COUNT);
+        let mut game = Self::new_with_player_count(player_count);
+        game.events.clear();
+        game.bank_chat.clear();
+
+        let mut player_index = 0usize;
+        for line in snapshot.lines() {
+            let parts = line.split('\t').collect::<Vec<_>>();
+            match parts.first().copied().unwrap_or("") {
+                "meta" if parts.len() >= 8 => {
+                    game.room_code = parts[1].to_string();
+                    game.phase = Phase::from_str(parts[2]);
+                    game.selection_cursor = parts[3].parse().ok()?;
+                    game.current_player_index = parts[4].parse().ok()?;
+                    game.dice = [parts[5].parse().ok()?, parts[6].parse().ok()?];
+                    game.bank_message = snapshot_unescape(parts[7]);
+                }
+                "selection" if parts.len() >= 2 => {
+                    game.selection_order = parts[1]
+                        .split(',')
+                        .filter_map(|value| value.parse::<usize>().ok())
+                        .collect();
+                }
+                "cards" if parts.len() >= 3 => {
+                    game.next_chance = parts[1].parse().ok()?;
+                    game.next_community = parts[2].parse().ok()?;
+                }
+                "pending" if parts.len() >= 3 => {
+                    game.pending_offer = Some(PendingOffer {
+                        player_index: parts[1].parse().ok()?,
+                        space_index: parts[2].parse().ok()?,
+                    });
+                }
+                "auction" if parts.len() >= 5 => {
+                    let bidder = parts[4].parse::<i32>().ok()?;
+                    game.auction = Some(AuctionState {
+                        space_index: parts[1].parse().ok()?,
+                        seller_turn_index: parts[2].parse().ok()?,
+                        highest_bid: parts[3].parse().ok()?,
+                        highest_bidder: (bidder >= 0).then_some(bidder as usize),
+                    });
+                }
+                "player" if parts.len() >= 8 && player_index < game.players.len() => {
+                    game.players[player_index].name = snapshot_unescape(parts[1]);
+                    game.players[player_index].cash = parts[2].parse().ok()?;
+                    game.players[player_index].position = parts[3].parse().ok()?;
+                    let token = snapshot_unescape(parts[4]);
+                    game.players[player_index].token = (!token.is_empty()).then_some(token);
+                    game.players[player_index].jailed = parse_bool(parts[5]);
+                    game.players[player_index].jail_turns = parts[6].parse().ok()?;
+                    game.players[player_index].bankrupt = parse_bool(parts[7]);
+                    player_index += 1;
+                }
+                "asset" if parts.len() >= 5 => {
+                    let index = parts[1].parse::<usize>().ok()?;
+                    if index < game.spaces.len() {
+                        let owner = parts[2].parse::<i32>().ok()?;
+                        game.owners[index] = (owner >= 0).then_some(owner as usize);
+                        game.buildings[index] = parts[3].parse().ok()?;
+                        game.mortgaged[index] = parse_bool(parts[4]);
+                    }
+                }
+                "event" if parts.len() >= 2 => game.events.push(snapshot_unescape(parts[1])),
+                "chat" if parts.len() >= 4 => game.bank_chat.push(BankChatMessage {
+                    speaker: snapshot_unescape(parts[1]),
+                    from_bank: parse_bool(parts[2]),
+                    text: snapshot_unescape(parts[3]),
+                }),
+                _ => {}
+            }
+        }
+        if game.selection_order.is_empty() {
+            game.selection_order = (0..game.players.len()).collect();
+        }
+        game.current_player_index %= game.players.len();
+        game.selection_cursor = game
+            .selection_cursor
+            .min(game.players.len().saturating_sub(1));
+        Some(game)
     }
 
     fn select_token(&mut self, token: &str, requested_name: &str) {
@@ -1665,6 +1968,14 @@ impl Phase {
             Phase::Auction => "auction",
         }
     }
+
+    fn from_str(value: &str) -> Self {
+        match value {
+            "play" => Phase::Play,
+            "auction" => Phase::Auction,
+            _ => Phase::TokenSelection,
+        }
+    }
 }
 
 impl BoardSpace {
@@ -1802,6 +2113,63 @@ fn optional_json_usize(value: Option<usize>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "null".to_string())
+}
+
+fn json_string_field(json: &str, key: &str) -> Option<String> {
+    let pattern = format!("\"{key}\":\"");
+    let start = json.find(&pattern)? + pattern.len();
+    let mut result = String::new();
+    let mut escaped = false;
+    for character in json[start..].chars() {
+        if escaped {
+            match character {
+                'n' => result.push('\n'),
+                '"' => result.push('"'),
+                '\\' => result.push('\\'),
+                other => result.push(other),
+            }
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == '"' {
+            return Some(result);
+        } else {
+            result.push(character);
+        }
+    }
+    None
+}
+
+fn snapshot_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+}
+
+fn snapshot_unescape(value: &str) -> String {
+    let mut result = String::new();
+    let mut escaped = false;
+    for character in value.chars() {
+        if escaped {
+            match character {
+                't' => result.push('\t'),
+                'n' => result.push('\n'),
+                '\\' => result.push('\\'),
+                other => result.push(other),
+            }
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else {
+            result.push(character);
+        }
+    }
+    result
+}
+
+fn parse_bool(value: &str) -> bool {
+    value == "true"
 }
 
 fn escape_json(value: &str) -> String {
@@ -2230,5 +2598,19 @@ mod tests {
         assert!(!game.players[0].jailed);
         assert_eq!(game.players[0].jail_turns, 0);
         assert_eq!(game.players[0].cash, cash_before - JAIL_FINE);
+    }
+
+    #[test]
+    fn snapshot_roundtrip_preserves_demo_state() {
+        let game = GameState::demo();
+        let snapshot = game.to_snapshot();
+        let loaded = GameState::from_snapshot(&snapshot).expect("snapshot should load");
+
+        assert_eq!(loaded.players[0].name, "Maja");
+        assert_eq!(loaded.players[1].jailed, true);
+        assert_eq!(loaded.owners[1], Some(0));
+        assert_eq!(loaded.buildings[21], 2);
+        assert_eq!(loaded.mortgaged[5], true);
+        assert!(loaded.bank_message.contains("Demo-läge"));
     }
 }
