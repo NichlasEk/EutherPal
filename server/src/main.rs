@@ -120,6 +120,7 @@ struct GameState {
     selection_cursor: usize,
     current_player_index: usize,
     dice: [u8; 2],
+    rng_state: u64,
     pending_offer: Option<PendingOffer>,
     auction: Option<AuctionState>,
     drawn_card: Option<DrawnCard>,
@@ -500,6 +501,7 @@ impl GameState {
             selection_order.push((first + offset) % players.len());
         }
         let first_name = players[first].name.clone();
+        let rng_state = seed_rng(player_count as u64);
 
         Self {
             room_code: "PAL-001".to_string(),
@@ -517,6 +519,7 @@ impl GameState {
             selection_cursor: 0,
             current_player_index: first,
             dice: [0, 0],
+            rng_state,
             pending_offer: None,
             auction: None,
             drawn_card: None,
@@ -686,6 +689,7 @@ impl GameState {
                 self.mortgaged[index]
             ));
         }
+        lines.push(format!("rng\t{}", self.rng_state));
         for event in &self.events {
             lines.push(format!("event\t{}", snapshot_escape(event)));
         }
@@ -731,6 +735,9 @@ impl GameState {
                 "cards" if parts.len() >= 3 => {
                     game.next_chance = parts[1].parse().ok()?;
                     game.next_community = parts[2].parse().ok()?;
+                }
+                "rng" if parts.len() >= 2 => {
+                    game.rng_state = parts[1].parse().ok()?;
                 }
                 "pending" if parts.len() >= 3 => {
                     game.pending_offer = Some(PendingOffer {
@@ -863,7 +870,7 @@ impl GameState {
             return;
         }
 
-        self.dice = [random_die(), random_die()];
+        self.dice = [self.roll_die(), self.roll_die()];
         self.drawn_card = None;
         if self.players[self.current_player_index].jailed {
             let player_name = self.players[self.current_player_index].name.clone();
@@ -1600,6 +1607,22 @@ impl GameState {
         } else {
             self.advance_to_next_active_player();
         }
+    }
+
+    fn roll_die(&mut self) -> u8 {
+        (self.next_random_u32() % 6 + 1) as u8
+    }
+
+    fn next_random_u32(&mut self) -> u32 {
+        if self.rng_state == 0 {
+            self.rng_state = seed_rng(self.current_player_index as u64 + 1);
+        }
+        let mut value = self.rng_state;
+        value ^= value >> 12;
+        value ^= value << 25;
+        value ^= value >> 27;
+        self.rng_state = value;
+        (value.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 32) as u32
     }
 
     fn current_selector_index(&self) -> usize {
@@ -2639,8 +2662,17 @@ fn random_index(max: usize) -> usize {
     nanos % max
 }
 
-fn random_die() -> u8 {
-    (random_index(6) + 1) as u8
+fn seed_rng(salt: u64) -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    let seed = nanos ^ salt.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    if seed == 0 {
+        0xA076_1D64_78BD_642F
+    } else {
+        seed
+    }
 }
 
 #[cfg(test)]
@@ -2696,6 +2728,23 @@ mod tests {
 
         assert_eq!(game.players[0].position, 0);
         assert!(game.bank_message.contains("Majas tur"));
+    }
+
+    #[test]
+    fn dice_rolls_use_two_independent_values() {
+        let mut game = playable_game();
+        game.rng_state = 0x1234_5678_9ABC_DEF0;
+        let mut saw_non_double = false;
+
+        for _ in 0..12 {
+            game.dice = [game.roll_die(), game.roll_die()];
+            if game.dice[0] != game.dice[1] {
+                saw_non_double = true;
+                break;
+            }
+        }
+
+        assert!(saw_non_double, "dice should not always be doubles");
     }
 
     #[test]

@@ -274,6 +274,17 @@ textarea {
   padding: 0;
 }
 
+.token-moving {
+  outline: 2px solid #fff8c7;
+  transform: translateY(-2px) scale(1.1);
+  animation: token-hop 0.34s ease-in-out infinite alternate;
+}
+
+@keyframes token-hop {
+  from { transform: translateY(1px) scale(1.04); }
+  to { transform: translateY(-4px) scale(1.14); }
+}
+
 .buildings {
   display: flex;
   justify-content: center;
@@ -852,6 +863,105 @@ body[data-view="mobile"] #mobile-events {
   background: #d8d2c6;
   color: #69635c;
   text-decoration: line-through;
+}
+
+body[data-view="tv"] .tv-shell {
+  grid-template-columns: minmax(560px, 1fr) clamp(300px, 20vw, 360px);
+  gap: 12px;
+  padding: clamp(22px, 3vh, 36px) clamp(18px, 2.4vw, 36px);
+}
+
+body[data-view="tv"] .board {
+  width: min(calc(100dvh - clamp(82px, 10vh, 116px)), calc(100vw - clamp(390px, 27vw, 500px)));
+}
+
+body[data-view="tv"] .side-panel {
+  gap: 7px;
+  font-size: 0.86rem;
+  scrollbar-width: thin;
+}
+
+body[data-view="tv"] .side-panel .panel-block {
+  border-width: 2px;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+body[data-view="tv"] .panel-block h2 {
+  margin-bottom: 4px;
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+body[data-view="tv"] .current-player {
+  font-size: 1.75rem;
+  line-height: 1;
+}
+
+body[data-view="tv"] .dice {
+  margin-top: 4px;
+  font-size: 0.92rem;
+}
+
+body[data-view="tv"] .player-list {
+  gap: 4px;
+}
+
+body[data-view="tv"] .player-row {
+  gap: 2px 8px;
+  padding-bottom: 4px;
+}
+
+body[data-view="tv"] .property-card {
+  gap: 4px;
+}
+
+body[data-view="tv"] .card-band {
+  min-height: 26px;
+}
+
+body[data-view="tv"] .card-band span {
+  width: 30px;
+  font-size: 0.64rem;
+}
+
+body[data-view="tv"] .property-card strong,
+body[data-view="tv"] .property-card p,
+body[data-view="tv"] .property-card dl {
+  margin-left: 8px;
+  margin-right: 8px;
+}
+
+body[data-view="tv"] .property-card strong {
+  font-size: 0.96rem;
+}
+
+body[data-view="tv"] .property-card p {
+  font-size: 0.72rem;
+  line-height: 1.16;
+}
+
+body[data-view="tv"] .property-card dl {
+  gap: 2px;
+  margin-bottom: 7px;
+  font-size: 0.76rem;
+}
+
+body[data-view="tv"] .token-status {
+  gap: 4px;
+  margin: 6px 0 2px;
+}
+
+body[data-view="tv"] .token-status span {
+  min-height: 26px;
+  border-width: 2px;
+  font-size: 0.66rem;
+}
+
+body[data-view="tv"] .event-list {
+  max-height: 78px;
+  overflow: hidden;
+  font-size: 0.72rem;
 }
 
 .inline-control {

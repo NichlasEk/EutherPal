@@ -27,6 +27,11 @@
   }
 })();
 
+const TV_TOKEN_STEP_MS = 170;
+let latestTvState = null;
+const tvTokenPositions = new Map();
+const tvTokenTimers = new Map();
+
 async function fetchState() {
   const response = await fetch("/api/game");
   if (!response.ok) throw new Error("Kunde inte hämta spelstatus");
@@ -50,6 +55,8 @@ async function fetchSettings() {
 }
 
 function renderTv(state) {
+  latestTvState = state;
+  const visiblePlayers = playersForTvBoard(state);
   document.getElementById("room-code").textContent = state.roomCode;
   document.getElementById("current-player").textContent = state.currentPlayer;
   document.getElementById("dice").textContent =
@@ -63,7 +70,7 @@ function renderTv(state) {
     tile.className = `tile ${tileClass(space, index)}`;
     tile.style.gridArea = gridAreaForBoardIndex(index);
     tile.tabIndex = 0;
-    tile.innerHTML = `<span class="tile-index">${index}</span><strong>${space.name}</strong>${spaceDetails(space)}${buildingMarkers(space)}<div class="tokens">${tokensAt(state.players, index)}</div>`;
+    tile.innerHTML = `<span class="tile-index">${index}</span><strong>${space.name}</strong>${spaceDetails(space)}${buildingMarkers(space)}<div class="tokens">${tokensAt(visiblePlayers, index)}</div>`;
     board.appendChild(tile);
   });
 
@@ -81,6 +88,59 @@ function renderTv(state) {
 
   renderPropertyCard(document.getElementById("tv-card"), selectedSpace(state));
   renderEvents(document.getElementById("tv-events"), state.events);
+}
+
+function playersForTvBoard(state) {
+  const boardSize = state.spaces.length || 40;
+  state.players.forEach((player, index) => {
+    const key = tvPlayerKey(player, index);
+    const target = Number(player.position) || 0;
+    const visible = tvTokenPositions.get(key);
+    if (visible === undefined) {
+      tvTokenPositions.set(key, target);
+      return;
+    }
+    if (visible !== target && !tvTokenTimers.has(key)) {
+      startTvTokenMove(key, visible, target, boardSize);
+    }
+  });
+
+  return state.players.map((player, index) => {
+    const key = tvPlayerKey(player, index);
+    const visible = tvTokenPositions.get(key);
+    return {
+      ...player,
+      position: visible === undefined ? player.position : visible,
+      moving: tvTokenTimers.has(key),
+    };
+  });
+}
+
+function startTvTokenMove(key, from, to, boardSize) {
+  let current = from;
+  let remaining = (to - from + boardSize) % boardSize;
+  if (remaining === 0) {
+    tvTokenPositions.set(key, to);
+    return;
+  }
+
+  const timer = window.setInterval(() => {
+    current = (current + 1) % boardSize;
+    remaining -= 1;
+    tvTokenPositions.set(key, current);
+    if (latestTvState) renderTv(latestTvState);
+    if (remaining <= 0) {
+      window.clearInterval(timer);
+      tvTokenTimers.delete(key);
+      tvTokenPositions.set(key, to);
+      if (latestTvState) renderTv(latestTvState);
+    }
+  }, TV_TOKEN_STEP_MS);
+  tvTokenTimers.set(key, timer);
+}
+
+function tvPlayerKey(player, index) {
+  return `${player.name || "spelare"}:${player.token || index}`;
 }
 
 function renderMobile(state) {
@@ -659,7 +719,8 @@ function tokenAvatar(player, size = "mini") {
   const iconHtml = icon
     ? `<img src="${icon}" alt="" loading="lazy"><i>${escapeHtml(glyph)}</i>`
     : `<i>${escapeHtml(glyph)}</i>`;
-  return `<span class="token-avatar token-${token} token-${size}" title="${title}">${iconHtml}</span>`;
+  const movingClass = player?.moving ? " token-moving" : "";
+  return `<span class="token-avatar token-${token} token-${size}${movingClass}" title="${title}">${iconHtml}</span>`;
 }
 
 function tokenIcon(token) {
