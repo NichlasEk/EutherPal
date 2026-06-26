@@ -1,3 +1,14 @@
+const POLL_INTERVAL_MS = {
+  tv: 1800,
+  mobile: 3000,
+  admin: 5000,
+};
+const ADMIN_HEALTH_TTL_MS = 15000;
+let latestMobileState = null;
+let cachedAdminHealth = null;
+let lastAdminHealthFetchAt = 0;
+let adminHealthRequest = null;
+
 (async function bootEutherPal() {
   const view = document.body.dataset.view;
   const state = await fetchState();
@@ -6,25 +17,15 @@
   if (view === "mobile") {
     bindMobileSwipe();
     renderMobile(state);
-    renderAdmin(state);
+    renderMobileAdminIfVisible(state, true);
     await renderSettings();
   }
   if (view === "admin") {
-    renderAdmin(state);
+    renderAdmin(state, { forceHealth: true });
     await renderSettings();
   }
 
-  if (view === "tv" || view === "admin" || view === "mobile") {
-    window.setInterval(async () => {
-      const freshState = await fetchState();
-      if (view === "tv") renderTv(freshState);
-      if (view === "admin") renderAdmin(freshState);
-      if (view === "mobile") {
-        renderMobile(freshState);
-        renderAdmin(freshState);
-      }
-    }, 1200);
-  }
+  startPolling(view);
 })();
 
 const TV_TOKEN_STEP_MS = 170;
@@ -53,6 +54,32 @@ async function fetchSettings() {
   const response = await fetch("/api/settings");
   if (!response.ok) throw new Error("Kunde inte hämta settings");
   return response.json();
+}
+
+function startPolling(view) {
+  if (!POLL_INTERVAL_MS[view]) return;
+  const interval = POLL_INTERVAL_MS[view];
+
+  const tick = async () => {
+    const startedAt = Date.now();
+    try {
+      if (view === "mobile" && actionInFlight) return;
+      const freshState = await fetchState();
+      if (view === "tv") renderTv(freshState);
+      if (view === "admin") renderAdmin(freshState);
+      if (view === "mobile") {
+        renderMobile(freshState);
+        renderMobileAdminIfVisible(freshState);
+      }
+    } catch (error) {
+      console.warn("Kunde inte uppdatera spelstatus", error);
+    } finally {
+      const elapsed = Date.now() - startedAt;
+      window.setTimeout(tick, Math.max(750, interval - elapsed));
+    }
+  };
+
+  window.setTimeout(tick, interval);
 }
 
 function renderTv(state) {
@@ -177,6 +204,7 @@ function tvPlayerKey(player, index) {
 }
 
 function renderMobile(state) {
+  latestMobileState = state;
   syncNameInput();
   const localPlayerName = localPlayer();
   const local = state.players.find((player) => player.name === localPlayerName);
@@ -217,17 +245,45 @@ function renderMobile(state) {
     runMobileAction(event.currentTarget, "Startar auktion...", "/api/game/decline", playerBody());
 }
 
-function renderAdmin(state) {
-  fetch("/health")
-    .then((response) => response.json())
-    .then((health) => {
-      document.getElementById("admin-server").textContent = health.status;
-      document.getElementById("admin-ai").textContent = health.ai;
-    });
+function renderAdmin(state, options = {}) {
+  renderCachedAdminHealth();
+  maybeRefreshAdminHealth(Boolean(options.forceHealth));
   document.getElementById("admin-room").textContent = state.roomCode;
   renderAdminTools(state);
   renderBankChat(document.getElementById("admin-bank-chat"), state.bankChat);
   bindAdminBankChat();
+}
+
+function renderCachedAdminHealth() {
+  if (!cachedAdminHealth) return;
+  const server = document.getElementById("admin-server");
+  const ai = document.getElementById("admin-ai");
+  if (server) server.textContent = cachedAdminHealth.status || "okänd";
+  if (ai) ai.textContent = cachedAdminHealth.ai || "-";
+}
+
+function maybeRefreshAdminHealth(force = false) {
+  const server = document.getElementById("admin-server");
+  const ai = document.getElementById("admin-ai");
+  if (!server && !ai) return;
+  const now = Date.now();
+  if (!force && cachedAdminHealth && now - lastAdminHealthFetchAt < ADMIN_HEALTH_TTL_MS) return;
+  if (adminHealthRequest) return;
+
+  lastAdminHealthFetchAt = now;
+  adminHealthRequest = fetch("/health")
+    .then((response) => response.json())
+    .then((health) => {
+      cachedAdminHealth = health;
+      renderCachedAdminHealth();
+    })
+    .catch(() => {
+      if (server) server.textContent = "okänd";
+      if (ai) ai.textContent = "offline";
+    })
+    .finally(() => {
+      adminHealthRequest = null;
+    });
 }
 
 async function renderSettings() {
@@ -407,6 +463,7 @@ function bindMobileSwipe() {
       tab.classList.toggle("active", selected);
       tab.setAttribute("aria-selected", selected ? "true" : "false");
     });
+    renderMobileAdminIfVisible(latestMobileState, true);
   };
 
   tabs.forEach((tab) => {
@@ -431,6 +488,16 @@ function bindMobileSwipe() {
   }, { passive: true });
 
   apply(active);
+}
+
+function currentMobilePane() {
+  const pane = localStorage.getItem("eutherpal.mobilePane");
+  return ["player", "assets", "admin"].includes(pane) ? pane : "player";
+}
+
+function renderMobileAdminIfVisible(state, forceHealth = false) {
+  if (!state || currentMobilePane() !== "admin") return;
+  renderAdmin(state, { forceHealth });
 }
 
 function bindAdminBankChat() {
