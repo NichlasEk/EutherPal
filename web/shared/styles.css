@@ -545,6 +545,32 @@ textarea {
   background: #edf7ef;
 }
 
+.bank-chat-message.thinking {
+  min-width: 112px;
+}
+
+.bank-chat-message.thinking p {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thinking-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #9bbce5;
+  border-top-color: #205da8;
+  border-radius: 50%;
+  animation: thinking-spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+
+@keyframes thinking-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .bank-chat-form {
   display: grid;
   grid-template-columns: 1fr auto;

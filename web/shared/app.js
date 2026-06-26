@@ -226,20 +226,52 @@ function renderBankChat(container, messages) {
   container.scrollTop = container.scrollHeight;
 }
 
+function renderBankThinking(container, messages, playerName, message) {
+  if (!container) return;
+  const pending = [
+    ...(messages || []),
+    { speaker: playerName || "Spelare", text: message, fromBank: false },
+    { speaker: "Banken", text: "Tänker", fromBank: true, thinking: true },
+  ];
+  container.innerHTML = pending
+    .map((item) => item.thinking
+      ? `<div class="bank-chat-message from-bank thinking"><strong>${escapeHtml(item.speaker)}</strong><p><span class="thinking-spinner" aria-hidden="true"></span>${escapeHtml(item.text)}...</p></div>`
+      : `<div class="bank-chat-message ${item.fromBank ? "from-bank" : "from-player"}"><strong>${escapeHtml(item.speaker)}</strong><p>${escapeHtml(item.text)}</p></div>`)
+    .join("");
+  container.scrollTop = container.scrollHeight;
+}
+
 function bindMobileBankChat(state) {
   const askButton = document.getElementById("ask-bank-button");
   const form = document.getElementById("bank-chat-form");
   const input = document.getElementById("bank-chat-input");
+  const submit = form?.querySelector('button[type="submit"]');
   if (!form || !input) return;
   if (askButton) askButton.onclick = () => input.focus();
   form.onsubmit = async (event) => {
     event.preventDefault();
     const message = input.value.trim();
     if (!message) return;
-    const body = new URLSearchParams({ player: localPlayerName(), message });
+    const player = localPlayerName();
+    const body = new URLSearchParams({ player, message });
     input.value = "";
-    const updated = await postAction("/api/bank/chat", body.toString());
-    renderMobile(updated);
+    input.disabled = true;
+    if (submit) submit.disabled = true;
+    renderBankThinking(document.getElementById("bank-chat"), state.bankChat, player, message);
+    try {
+      const updated = await postAction("/api/bank/chat", body.toString());
+      renderMobile(updated);
+    } catch (error) {
+      renderBankChat(document.getElementById("bank-chat"), [
+        ...(state.bankChat || []),
+        { speaker: player || "Spelare", text: message, fromBank: false },
+        { speaker: "Banken", text: "Jag fick inget svar från LLM just nu. Försök igen.", fromBank: true },
+      ]);
+    } finally {
+      input.disabled = false;
+      if (submit) submit.disabled = false;
+      input.focus();
+    }
   };
 }
 
