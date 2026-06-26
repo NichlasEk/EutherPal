@@ -1,6 +1,8 @@
 use std::env;
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,6 +12,9 @@ const MOBILE_HTML: &str = include_str!("../../web/mobile/index.html");
 const ADMIN_HTML: &str = include_str!("../../web/admin/index.html");
 const STYLES_CSS: &str = include_str!("../../web/shared/styles.css");
 const APP_JS: &str = include_str!("../../web/shared/app.js");
+const DEFAULT_PREPROMPT: &str = include_str!("../../prompts/supergemma.bank.sv.md");
+const SETTINGS_PATH: &str = "data/settings.toml";
+const DEFAULT_MODEL: &str = "supergemma";
 
 const TOKEN_CHOICES: &[(&str, &str)] = &[
     ("bil", "Bil"),
@@ -143,6 +148,19 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
             let game = game.lock().expect("game state lock");
             json(200, &game.to_json())
         }
+        ("GET", "/api/settings") => json(200, &load_settings().to_json()),
+        ("POST", "/api/settings") => {
+            let mut settings = load_settings();
+            settings.model = form_value(&body, "model").unwrap_or(settings.model);
+            settings.preprompt = form_value(&body, "preprompt").unwrap_or(settings.preprompt);
+            match save_settings(&settings) {
+                Ok(()) => json(200, &settings.to_json()),
+                Err(error) => json(
+                    500,
+                    &format!("{{\"error\":\"{}\"}}", escape_json(&error.to_string())),
+                ),
+            }
+        }
         ("POST", "/api/game/new") => {
             let mut game = game.lock().expect("game state lock");
             *game = GameState::new();
@@ -172,6 +190,37 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
     stream.write_all(response.as_bytes())?;
     stream.flush()?;
     Ok(())
+}
+
+struct Settings {
+    model: String,
+    preprompt: String,
+}
+
+impl Settings {
+    fn default() -> Self {
+        Self {
+            model: DEFAULT_MODEL.to_string(),
+            preprompt: DEFAULT_PREPROMPT.trim().to_string(),
+        }
+    }
+
+    fn to_json(&self) -> String {
+        format!(
+            "{{\"model\":\"{}\",\"preprompt\":\"{}\",\"path\":\"{}\"}}",
+            escape_json(&self.model),
+            escape_json(&self.preprompt),
+            SETTINGS_PATH
+        )
+    }
+
+    fn to_toml(&self) -> String {
+        format!(
+            "[llm]\nmodel = \"{}\"\n\n[bank]\npreprompt = \"\"\"\n{}\n\"\"\"\n",
+            escape_toml_string(&self.model),
+            escape_toml_multiline(&self.preprompt)
+        )
+    }
 }
 
 impl GameState {
@@ -378,8 +427,8 @@ fn split_target(target: &str) -> (&str, &str) {
 
 fn form_value(body: &str, key: &str) -> Option<String> {
     body.split('&')
-        .find_map(|pair| pair.split_once('='))
-        .filter(|(name, _)| *name == key)
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(name, _)| *name == key)
         .map(|(_, value)| url_decode(value))
 }
 
@@ -388,7 +437,35 @@ fn query_value(query: &str, key: &str) -> Option<String> {
 }
 
 fn url_decode(value: &str) -> String {
-    value.replace('+', " ")
+    let mut bytes = Vec::new();
+    let raw = value.as_bytes();
+    let mut index = 0;
+
+    while index < raw.len() {
+        match raw[index] {
+            b'+' => {
+                bytes.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < raw.len() => {
+                if let Ok(hex) = std::str::from_utf8(&raw[index + 1..index + 3]) {
+                    if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                        bytes.push(byte);
+                        index += 3;
+                        continue;
+                    }
+                }
+                bytes.push(raw[index]);
+                index += 1;
+            }
+            byte => {
+                bytes.push(byte);
+                index += 1;
+            }
+        }
+    }
+
+    String::from_utf8_lossy(&bytes).to_string()
 }
 
 fn redirect(location: &str) -> String {
@@ -431,6 +508,57 @@ fn escape_json(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('\n', "\\n")
+}
+
+fn load_settings() -> Settings {
+    let Ok(toml) = fs::read_to_string(SETTINGS_PATH) else {
+        return Settings::default();
+    };
+
+    let mut settings = Settings::default();
+    if let Some(model) = toml_string_value(&toml, "model") {
+        settings.model = model;
+    }
+    if let Some(preprompt) = toml_multiline_value(&toml, "preprompt") {
+        settings.preprompt = preprompt.trim().to_string();
+    }
+    settings
+}
+
+fn save_settings(settings: &Settings) -> std::io::Result<()> {
+    if let Some(parent) = Path::new(SETTINGS_PATH).parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(SETTINGS_PATH, settings.to_toml())
+}
+
+fn toml_string_value(toml: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key} = ");
+    toml.lines()
+        .find_map(|line| line.trim().strip_prefix(&prefix))
+        .and_then(|value| {
+            let value = value.trim();
+            value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .map(|value| value.replace("\\\"", "\"").replace("\\\\", "\\"))
+        })
+}
+
+fn toml_multiline_value(toml: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key} = \"\"\"");
+    let start = toml.find(&prefix)? + prefix.len();
+    let rest = &toml[start..];
+    let end = rest.find("\"\"\"")?;
+    Some(rest[..end].to_string())
+}
+
+fn escape_toml_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn escape_toml_multiline(value: &str) -> String {
+    value.replace("\"\"\"", "\\\"\\\"\\\"")
 }
 
 fn token_label(token: &str) -> &'static str {

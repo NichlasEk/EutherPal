@@ -175,6 +175,8 @@ Admin ska kunna andra:
 - strikt/lekfull regelton
 - loggniva
 
+Forsta admin-settings ska ha `supergemma` som defaultmodell. Modellval och bankens preprompt ska kunna andras fran adminvyn och sparas till runtime-TOML utan att behova commitas.
+
 ## Sakerhet och drift
 
 Prioritet fran start:
@@ -245,6 +247,13 @@ Forsta regelprofilen ska ligga nara klassiska Monopol-regler:
 - passage av "Ga" ger lon
 - dubbel tarning ger nytt slag
 - servern, inte AI:n, avgor position, pengar och lagliga actions
+
+Regler, brade och vissa admin-andringsbara varden ska kunna ligga i TOML:
+
+- `rules/monopoly.sv.toml` for regelprofil och ekonomiska grundvarden
+- `rules/board.lindesberg.toml` for bradets rutor
+- `config/settings.example.toml` for dokumenterade settings utan secrets
+- `data/settings.toml` for lokala runtime-settings som admin eller AI kan andra
 
 ## Foreslagen repo-struktur
 

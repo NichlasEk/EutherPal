@@ -1,0 +1,199 @@
+[[spaces]]
+index = 0
+kind = "go"
+name = "Gå"
+
+[[spaces]]
+index = 1
+kind = "property"
+name = "Kristinavägen"
+
+[[spaces]]
+index = 2
+kind = "community"
+name = "Allmänning"
+
+[[spaces]]
+index = 3
+kind = "property"
+name = "Kungsgatan"
+
+[[spaces]]
+index = 4
+kind = "tax"
+name = "Inkomstskatt"
+
+[[spaces]]
+index = 5
+kind = "station"
+name = "Lindesberg C"
+
+[[spaces]]
+index = 6
+kind = "property"
+name = "Storgatan"
+
+[[spaces]]
+index = 7
+kind = "chance"
+name = "Chans"
+
+[[spaces]]
+index = 8
+kind = "property"
+name = "Rådhustorget"
+
+[[spaces]]
+index = 9
+kind = "property"
+name = "Prästgatan"
+
+[[spaces]]
+index = 10
+kind = "jail"
+name = "Fängelse"
+
+[[spaces]]
+index = 11
+kind = "property"
+name = "Köpmangatan"
+
+[[spaces]]
+index = 12
+kind = "utility"
+name = "Elverket"
+
+[[spaces]]
+index = 13
+kind = "property"
+name = "Bergslagsvägen"
+
+[[spaces]]
+index = 14
+kind = "property"
+name = "Norrtullsgatan"
+
+[[spaces]]
+index = 15
+kind = "station"
+name = "Frövi station"
+
+[[spaces]]
+index = 16
+kind = "property"
+name = "Bondegatan"
+
+[[spaces]]
+index = 17
+kind = "community"
+name = "Allmänning"
+
+[[spaces]]
+index = 18
+kind = "property"
+name = "Kyrkberget"
+
+[[spaces]]
+index = 19
+kind = "property"
+name = "Smedjegatan"
+
+[[spaces]]
+index = 20
+kind = "free_parking"
+name = "Fri parkering"
+
+[[spaces]]
+index = 21
+kind = "property"
+name = "Loppholmarna"
+
+[[spaces]]
+index = 22
+kind = "chance"
+name = "Chans"
+
+[[spaces]]
+index = 23
+kind = "property"
+name = "Strandpromenaden"
+
+[[spaces]]
+index = 24
+kind = "property"
+name = "Sjövägen"
+
+[[spaces]]
+index = 25
+kind = "station"
+name = "Storå station"
+
+[[spaces]]
+index = 26
+kind = "property"
+name = "Björkhyttevägen"
+
+[[spaces]]
+index = 27
+kind = "utility"
+name = "Vattenverket"
+
+[[spaces]]
+index = 28
+kind = "property"
+name = "Gusselbyvägen"
+
+[[spaces]]
+index = 29
+kind = "property"
+name = "Löpargatan"
+
+[[spaces]]
+index = 30
+kind = "go_to_jail"
+name = "Gå i fängelse"
+
+[[spaces]]
+index = 31
+kind = "property"
+name = "Hagavägen"
+
+[[spaces]]
+index = 32
+kind = "property"
+name = "Lasarettsgatan"
+
+[[spaces]]
+index = 33
+kind = "community"
+name = "Allmänning"
+
+[[spaces]]
+index = 34
+kind = "property"
+name = "Brotorpsvägen"
+
+[[spaces]]
+index = 35
+kind = "station"
+name = "Fellingsbro station"
+
+[[spaces]]
+index = 36
+kind = "chance"
+name = "Chans"
+
+[[spaces]]
+index = 37
+kind = "property"
+name = "Lindesjön"
+
+[[spaces]]
+index = 38
+kind = "tax"
+name = "Lyxskatt"
+
+[[spaces]]
+index = 39
+kind = "property"
+name = "Apothic Avenue"

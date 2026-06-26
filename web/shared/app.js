@@ -4,7 +4,10 @@
 
   if (view === "tv") renderTv(state);
   if (view === "mobile") renderMobile(state);
-  if (view === "admin") renderAdmin(state);
+  if (view === "admin") {
+    renderAdmin(state);
+    await renderSettings();
+  }
 
   if (view === "tv" || view === "admin") {
     window.setInterval(async () => {
@@ -28,6 +31,12 @@ async function postAction(path, body) {
     body,
   });
   if (!response.ok) throw new Error("Kunde inte uppdatera spelet");
+  return response.json();
+}
+
+async function fetchSettings() {
+  const response = await fetch("/api/settings");
+  if (!response.ok) throw new Error("Kunde inte hämta settings");
   return response.json();
 }
 
@@ -92,6 +101,32 @@ function renderAdmin(state) {
       document.getElementById("admin-ai").textContent = health.ai;
     });
   document.getElementById("admin-room").textContent = state.roomCode;
+}
+
+async function renderSettings() {
+  const settings = await fetchSettings();
+  const modelSelect = document.getElementById("model-select");
+  const prepromptInput = document.getElementById("preprompt-input");
+  const status = document.getElementById("settings-status");
+  const path = document.getElementById("settings-path");
+
+  modelSelect.value = [...modelSelect.options].some((option) => option.value === settings.model)
+    ? settings.model
+    : "custom";
+  prepromptInput.value = settings.preprompt;
+  status.textContent = `Laddat från ${settings.path}`;
+  path.textContent = settings.path;
+
+  document.getElementById("settings-form").onsubmit = async (event) => {
+    event.preventDefault();
+    status.textContent = "Sparar...";
+    const body = new URLSearchParams({
+      model: modelSelect.value,
+      preprompt: prepromptInput.value,
+    });
+    const updated = await postAction("/api/settings", body.toString());
+    status.textContent = `Sparat till ${updated.path}`;
+  };
 }
 
 function tokensAt(players, position) {

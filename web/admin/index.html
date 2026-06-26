@@ -28,7 +28,28 @@
 
       <section class="control-panel">
         <h2>LLM-profil</h2>
-        <p>Adminvy är scaffoldad. Riktiga inställningar kopplas efter auth och runtime secrets.</p>
+        <form id="settings-form" class="settings-form">
+          <label for="model-select">Modell</label>
+          <select id="model-select" name="model">
+            <option value="supergemma">supergemma</option>
+            <option value="llama-local">llama-local</option>
+            <option value="mistral-local">mistral-local</option>
+            <option value="custom">custom</option>
+          </select>
+
+          <label for="preprompt-input">Preprompt</label>
+          <textarea id="preprompt-input" name="preprompt" rows="14"></textarea>
+
+          <div class="settings-actions">
+            <button id="save-settings-button" type="submit">Spara settings</button>
+            <span id="settings-status">Laddar settings...</span>
+          </div>
+        </form>
+      </section>
+
+      <section class="control-panel">
+        <h2>TOML</h2>
+        <p>Runtime-settings sparas i <strong id="settings-path">data/settings.toml</strong>. Regler och bräddata kan ligga i TOML så admin och AI kan ändra dem kontrollerat.</p>
       </section>
     </main>
   </body>

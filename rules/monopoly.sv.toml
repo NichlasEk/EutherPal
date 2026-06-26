@@ -1,0 +1,22 @@
+[game]
+display_name = "EutherPål"
+language = "sv"
+starting_cash = 15000
+go_salary = 2000
+first_player_mode = "random_dev"
+double_roll_extra_turn = true
+
+[tokens]
+choices = ["bil", "hatt", "skepp", "hund", "sko"]
+
+[phases]
+first = "token_selection"
+
+[bank]
+default_model = "supergemma"
+default_preprompt = "prompts/supergemma.bank.sv.md"
+
+[rules]
+server_is_authority = true
+ai_can_explain_rules = true
+ai_can_change_state_directly = false

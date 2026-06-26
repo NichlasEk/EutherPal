@@ -26,7 +26,9 @@ body {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -46,6 +48,26 @@ input {
   border-radius: 6px;
   padding: 0 12px;
   background: white;
+}
+
+select,
+textarea {
+  width: 100%;
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  background: white;
+}
+
+select {
+  min-height: 44px;
+  padding: 0 12px;
+}
+
+textarea {
+  min-height: 260px;
+  padding: 12px;
+  line-height: 1.35;
+  resize: vertical;
 }
 
 .eyebrow {
@@ -359,6 +381,28 @@ input {
 .status-grid dd {
   margin: 0;
   font-weight: 900;
+}
+
+.settings-form {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-form label {
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.settings-actions span {
+  color: var(--muted);
+  font-weight: 800;
 }
 
 @media (max-width: 900px) {
