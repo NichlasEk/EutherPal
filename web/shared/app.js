@@ -241,9 +241,21 @@ async function renderSettings() {
 function spaceDetails(space) {
   const rent = space.currentRent || space.rent;
   const mortgage = space.mortgaged ? " · Intecknad" : "";
+  if (document.body.dataset.view === "tv") {
+    if (space.owner) return `<small>Ägs ${shortName(space.owner)}${space.mortgaged ? " · Pant" : ""}</small>`;
+    if (space.price) return `<small>${space.price} kr${rent ? ` · H ${rent}` : ""}</small>`;
+    return "";
+  }
   if (space.owner) return `<small>Ägs: ${space.owner}${rent ? ` · Hyra ${rent}` : ""}${mortgage}</small>`;
   if (space.price) return `<small>${space.price} kr${rent ? ` · Hyra ${rent}` : ""}</small>`;
   return "";
+}
+
+function shortName(name) {
+  const parts = cleanName(name).split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "";
+  if (parts.length === 1) return parts[0].slice(0, 8);
+  return parts.map((part) => part[0].toUpperCase()).join("");
 }
 
 function selectedSpace(state, preferredPlayer) {
