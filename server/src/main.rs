@@ -1582,7 +1582,9 @@ impl GameState {
         }
 
         self.push_bank_message(&player_name, &message, false);
-        let answer = self.mock_bank_answer(&player_name, &message);
+        let answer = self
+            .llm_bank_answer(&player_name, &message)
+            .unwrap_or_else(|| self.mock_bank_answer(&player_name, &message));
         self.bank_message = format!("Banken till {player_name}: {answer}");
         self.push_bank_message("Banken", &answer, true);
     }
@@ -1611,6 +1613,58 @@ impl GameState {
         if self.bank_chat.len() > 24 {
             self.bank_chat.remove(0);
         }
+    }
+
+    fn llm_bank_answer(&self, player_name: &str, message: &str) -> Option<String> {
+        let llm_url = env::var("EUTHERPAL_LLM_URL").ok()?;
+        if llm_url.trim().is_empty() || llm_url == "mock" {
+            return None;
+        }
+        let settings = load_settings();
+        let model = if settings.model == "supergemma" {
+            env::var("EUTHERPAL_LLM_MODEL")
+                .unwrap_or_else(|_| "supergemma4-26b-free:latest".to_string())
+        } else {
+            settings.model
+        };
+        let prompt = self.bank_prompt(player_name, message, &settings.preprompt);
+        call_ollama_generate(&llm_url, &model, &prompt)
+            .ok()
+            .map(|answer| clean_chat_message(&answer))
+            .filter(|answer| !answer.is_empty())
+    }
+
+    fn bank_prompt(&self, player_name: &str, message: &str, preprompt: &str) -> String {
+        let player_context = self
+            .players
+            .iter()
+            .map(|player| {
+                let space = self
+                    .spaces
+                    .get(player.position)
+                    .map(|space| space.name.as_str())
+                    .unwrap_or("okänd ruta");
+                format!(
+                    "- {}: {} kr, står på {}, pjäs {}, fängelse {}, konkurs {}",
+                    player.name,
+                    player.cash,
+                    space,
+                    player.token.as_deref().unwrap_or("ingen"),
+                    player.jailed,
+                    player.bankrupt
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let latest_events = self.events.join("\n");
+        format!(
+            "{preprompt}\n\nAktuell spelstatus:\nTur: {}\nFas: {}\nBankmeddelande: {}\nSpelare:\n{}\nSenaste händelser:\n{}\n\nSpelaren {player_name} frågar: {message}\nSvara kort på svenska som bank/spelledare. Ge bara hjälp om spelet och reglerna.",
+            self.players[self.current_selector_index()].name,
+            self.phase.as_str(),
+            self.bank_message,
+            player_context,
+            latest_events
+        )
     }
 
     fn mock_bank_answer(&self, player_name: &str, message: &str) -> String {
@@ -2138,6 +2192,48 @@ fn json_string_field(json: &str, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn call_ollama_generate(url: &str, model: &str, prompt: &str) -> std::io::Result<String> {
+    let (host, port, path) = parse_http_url(url).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "bara http:// stöds för LLM",
+        )
+    })?;
+    let body = format!(
+        "{{\"model\":\"{}\",\"prompt\":\"{}\",\"stream\":false}}",
+        escape_json(model),
+        escape_json(prompt)
+    );
+    let mut stream = TcpStream::connect((host.as_str(), port))?;
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.as_bytes().len()
+    );
+    stream.write_all(request.as_bytes())?;
+    stream.flush()?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    let (_, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "ogiltigt LLM-svar"))?;
+    json_string_field(body, "response").ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "LLM-svar saknar response")
+    })
+}
+
+fn parse_http_url(url: &str) -> Option<(String, u16, String)> {
+    let rest = url.strip_prefix("http://")?;
+    let (host_port, path) = match rest.split_once('/') {
+        Some((host_port, path)) => (host_port, format!("/{path}")),
+        None => (rest, "/".to_string()),
+    };
+    let (host, port) = match host_port.rsplit_once(':') {
+        Some((host, port)) => (host.to_string(), port.parse().ok()?),
+        None => (host_port.to_string(), 80),
+    };
+    Some((host, port, path))
 }
 
 fn snapshot_escape(value: &str) -> String {

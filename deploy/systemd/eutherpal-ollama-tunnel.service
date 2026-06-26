@@ -1,0 +1,13 @@
+[Unit]
+Description=EutherPal Ollama reverse tunnel to server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ssh -N -T -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -o TCPKeepAlive=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o BatchMode=yes -o IdentitiesOnly=yes -i /home/nichlas/.ssh/euther_server -R 127.0.0.1:11434:127.0.0.1:11434 euther-server
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
