@@ -2,7 +2,10 @@
   const view = document.body.dataset.view;
   const state = await fetchState();
 
-  if (view === "tv") renderTv(state);
+  if (view === "tv") {
+    window.addEventListener("resize", scheduleTvTileFit);
+    renderTv(state);
+  }
   if (view === "mobile") {
     bindMobileSwipe();
     renderMobile(state);
@@ -72,7 +75,7 @@ function renderTv(state) {
     tile.className = `tile ${tileClass(space, index)}`;
     tile.style.gridArea = gridAreaForBoardIndex(index);
     tile.tabIndex = 0;
-    tile.innerHTML = `<span class="tile-index">${index}</span><strong>${space.name}</strong>${spaceDetails(space)}${buildingMarkers(space)}<div class="tokens">${tokensAt(visiblePlayers, index)}</div>`;
+    tile.innerHTML = tileContent(space, visiblePlayers, index);
     board.appendChild(tile);
   });
 
@@ -87,9 +90,67 @@ function renderTv(state) {
       .map((token) => `<span class="${token.available ? "available" : "taken"}">${token.label}</span>`)
       .join("");
   }
+  const tokenPanelShell = document.getElementById("tv-token-panel");
+  if (tokenPanelShell) tokenPanelShell.hidden = state.phase !== "token_selection";
 
   renderPropertyCard(document.getElementById("tv-card"), selectedSpace(state));
   renderEvents(document.getElementById("tv-events"), state.events);
+  scheduleTvTileFit();
+}
+
+function tileContent(space, players, position) {
+  const meta = tvTileMeta(space);
+  return `<span class="tile-index">${position}</span><div class="tile-copy"><strong class="tile-name">${escapeHtml(space.name)}</strong>${meta ? `<small class="tile-meta">${escapeHtml(meta)}</small>` : ""}</div>${buildingMarkers(space)}${tileTokenLayer(players, position)}`;
+}
+
+function tvTileMeta(space) {
+  const rent = space.currentRent || space.rent;
+  if (space.mortgaged) return "Intecknad";
+  if (space.owner) return `Ägs ${shortName(space.owner)}`;
+  if (space.price && rent) return `${space.price} kr · H ${rent}`;
+  if (space.price) return `${space.price} kr`;
+  return "";
+}
+
+function tileTokenLayer(players, position) {
+  const occupants = players.filter((player) => player.position === position && player.token && !player.bankrupt);
+  const count = Math.min(occupants.length, 5);
+  return `<div class="tokens tokens-count-${count}">${occupants.map((player) => tokenAvatar(player, "mini")).join("")}</div>`;
+}
+
+function scheduleTvTileFit() {
+  if (document.body.dataset.view !== "tv") return;
+  window.requestAnimationFrame(() => window.requestAnimationFrame(fitTvTiles));
+}
+
+function fitTvTiles() {
+  if (document.body.dataset.view !== "tv") return;
+  document.querySelectorAll(".tile").forEach((tile) => {
+    const copy = tile.querySelector(".tile-copy");
+    const name = tile.querySelector(".tile-name");
+    const meta = tile.querySelector(".tile-meta");
+    if (!copy || !name) return;
+
+    const sizes = [
+      [11, 6.8],
+      [10, 6.4],
+      [9, 6],
+      [8, 5.6],
+      [7.2, 0],
+    ];
+    for (const [nameSize, metaSize] of sizes) {
+      name.style.fontSize = `${nameSize}px`;
+      if (meta) {
+        meta.hidden = metaSize === 0;
+        meta.style.fontSize = `${metaSize}px`;
+      }
+      if (fitsTileCopy(copy)) return;
+    }
+  });
+}
+
+function fitsTileCopy(copy) {
+  return copy.scrollHeight <= copy.clientHeight + 1 && copy.scrollWidth <= copy.clientWidth + 1;
 }
 
 function renderTvAuction(state) {
