@@ -20,8 +20,10 @@ const TOKEN_SKO_PNG: &[u8] = include_bytes!("../../web/assets/tokens/sko.png");
 const DEFAULT_PREPROMPT: &str = include_str!("../../prompts/supergemma.bank.sv.md");
 const BOARD_TOML: &str = include_str!("../../rules/board.lindesberg.toml");
 const CARDS_TOML: &str = include_str!("../../rules/cards.sv.toml");
+const DEFAULT_BANK_RULES_TOML: &str = include_str!("../../rules/bank.rules.toml");
 const SETTINGS_PATH: &str = "data/settings.toml";
 const GAME_STATE_PATH: &str = "data/game-state.json";
+const BANK_RULES_PATH: &str = "rules/bank.rules.toml";
 const DEFAULT_MODEL: &str = "supergemma";
 const DEFAULT_PLAYER_COUNT: usize = 4;
 const MIN_PLAYER_COUNT: usize = 2;
@@ -80,6 +82,34 @@ struct AuctionState {
     last_bid_at_ms: u128,
 }
 
+struct BankRules {
+    emergency_loan_limit: i32,
+    emergency_loan_required_requests: usize,
+    player_loan_limit: i32,
+    donation_limit: i32,
+    trade_cash_limit: i32,
+}
+
+#[derive(Clone)]
+struct BankProposal {
+    id: u64,
+    kind: String,
+    requester_index: usize,
+    counterparty_index: usize,
+    awaiting_player_index: usize,
+    cash_from_requester: i32,
+    cash_from_counterparty: i32,
+    spaces_from_requester: Vec<usize>,
+    spaces_from_counterparty: Vec<usize>,
+    note: String,
+}
+
+struct BankAsyncJob {
+    player_name: String,
+    prompt: String,
+    fallback_answer: String,
+}
+
 #[derive(Clone)]
 struct GameCard {
     deck: String,
@@ -128,6 +158,8 @@ struct GameState {
     pending_offer: Option<PendingOffer>,
     auction: Option<AuctionState>,
     drawn_card: Option<DrawnCard>,
+    bank_proposals: Vec<BankProposal>,
+    next_bank_proposal_id: u64,
     bank_chat: Vec<BankChatMessage>,
     events: Vec<String>,
     free_parking_pot: i32,
@@ -387,8 +419,54 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
             let message = form_value(&body, "message")
                 .or_else(|| query_value(query, "message"))
                 .unwrap_or_default();
+            let (body, async_job) = {
+                let mut game_state = game.lock().expect("game state lock");
+                let async_job = game_state.ask_bank(&player, &message);
+                (game_state.to_json(), async_job)
+            };
+            if let Some(job) = async_job {
+                spawn_bank_answer(Arc::clone(&game), job);
+            }
+            json(200, &body)
+        }
+        ("POST", "/api/bank/proposal/accept") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
+            let proposal_id = form_value(&body, "proposalId")
+                .or_else(|| query_value(query, "proposalId"))
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
             let mut game = game.lock().expect("game state lock");
-            game.ask_bank(&player, &message);
+            game.accept_bank_proposal(&player, proposal_id);
+            json(200, &game.to_json())
+        }
+        ("POST", "/api/bank/proposal/decline") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
+            let proposal_id = form_value(&body, "proposalId")
+                .or_else(|| query_value(query, "proposalId"))
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            let mut game = game.lock().expect("game state lock");
+            game.decline_bank_proposal(&player, proposal_id);
+            json(200, &game.to_json())
+        }
+        ("POST", "/api/bank/proposal/counter") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
+            let proposal_id = form_value(&body, "proposalId")
+                .or_else(|| query_value(query, "proposalId"))
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            let amount = form_value(&body, "amount")
+                .or_else(|| query_value(query, "amount"))
+                .and_then(|value| value.parse::<i32>().ok())
+                .unwrap_or(0);
+            let mut game = game.lock().expect("game state lock");
+            game.counter_bank_proposal(&player, proposal_id, amount);
             json(200, &game.to_json())
         }
         ("POST", "/api/bank/admin-message") => {
@@ -415,6 +493,18 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
     stream.write_all(&response)?;
     stream.flush()?;
     Ok(())
+}
+
+fn spawn_bank_answer(game: SharedGame, job: BankAsyncJob) {
+    thread::spawn(move || {
+        let result = llm_answer_for_prompt(&job.prompt);
+        let mut game = game.lock().expect("game state lock");
+        let (answer, status) = match result {
+            Ok(answer) => (answer, llm_config_label()),
+            Err(error) => (job.fallback_answer, format!("mock fallback: {error}")),
+        };
+        game.finish_async_bank_answer(&job.player_name, &answer, &status);
+    });
 }
 
 struct Settings {
@@ -463,6 +553,24 @@ fn llm_config_label() -> String {
     match env::var("EUTHERPAL_LLM_URL") {
         Ok(url) if !url.trim().is_empty() && url != "mock" => format!("llm:{model}"),
         _ => format!("mock:{model}"),
+    }
+}
+
+fn llm_answer_for_prompt(prompt: &str) -> Result<String, String> {
+    let llm_url =
+        env::var("EUTHERPAL_LLM_URL").map_err(|_| "EUTHERPAL_LLM_URL saknas".to_string())?;
+    if llm_url.trim().is_empty() || llm_url == "mock" {
+        return Err("LLM är satt till mock".to_string());
+    }
+    let settings = load_settings();
+    let model = llm_model_name(&settings);
+    let answer = call_ollama_generate(&llm_url, &model, prompt)
+        .map_err(|error| error.to_string())
+        .map(|answer| clean_chat_message(&answer))?;
+    if answer.is_empty() {
+        Err("LLM gav tomt svar".to_string())
+    } else {
+        Ok(answer)
     }
 }
 
@@ -528,6 +636,8 @@ impl GameState {
             pending_offer: None,
             auction: None,
             drawn_card: None,
+            bank_proposals: Vec::new(),
+            next_bank_proposal_id: 1,
             bank_chat: vec![BankChatMessage {
                 speaker: "Banken".to_string(),
                 text: "Jag är redo som bank och spelledare. Skriv i mobilen om du vill fråga om regler, köp, hyra eller din position.".to_string(),
@@ -658,6 +768,22 @@ impl GameState {
             self.next_chance, self.next_community
         ));
         lines.push(format!("pot\t{}", self.free_parking_pot));
+        lines.push(format!("proposal_next\t{}", self.next_bank_proposal_id));
+        for proposal in &self.bank_proposals {
+            lines.push(format!(
+                "proposal\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                proposal.id,
+                snapshot_escape(&proposal.kind),
+                proposal.requester_index,
+                proposal.counterparty_index,
+                proposal.awaiting_player_index,
+                proposal.cash_from_requester,
+                proposal.cash_from_counterparty,
+                snapshot_usize_list(&proposal.spaces_from_requester),
+                snapshot_usize_list(&proposal.spaces_from_counterparty),
+                snapshot_escape(&proposal.note)
+            ));
+        }
         if let Some(offer) = &self.pending_offer {
             lines.push(format!(
                 "pending\t{}\t{}",
@@ -751,6 +877,28 @@ impl GameState {
                 }
                 "pot" if parts.len() >= 2 => {
                     game.free_parking_pot = parts[1].parse().ok()?;
+                }
+                "proposal_next" if parts.len() >= 2 => {
+                    game.next_bank_proposal_id = parts[1].parse().ok()?;
+                }
+                "proposal" if parts.len() >= 10 => {
+                    let proposal = BankProposal {
+                        id: parts[1].parse().ok()?,
+                        kind: snapshot_unescape(parts[2]),
+                        requester_index: parts[3].parse().ok()?,
+                        counterparty_index: parts[4].parse().ok()?,
+                        awaiting_player_index: parts[5].parse().ok()?,
+                        cash_from_requester: parts[6].parse().ok()?,
+                        cash_from_counterparty: parts[7].parse().ok()?,
+                        spaces_from_requester: parse_snapshot_usize_list(parts[8]),
+                        spaces_from_counterparty: parse_snapshot_usize_list(parts[9]),
+                        note: parts
+                            .get(10)
+                            .map(|value| snapshot_unescape(value))
+                            .unwrap_or_default(),
+                    };
+                    game.next_bank_proposal_id = game.next_bank_proposal_id.max(proposal.id + 1);
+                    game.bank_proposals.push(proposal);
                 }
                 "pending" if parts.len() >= 3 => {
                     game.pending_offer = Some(PendingOffer {
@@ -1734,7 +1882,237 @@ impl GameState {
         }
     }
 
-    fn ask_bank(&mut self, player_name: &str, message: &str) {
+    fn accept_bank_proposal(&mut self, player_name: &str, proposal_id: u64) {
+        let Some(player_index) = self.player_index_by_name(player_name) else {
+            self.bank_message = "Banken hittar inte spelaren för det här förslaget.".to_string();
+            return;
+        };
+        let Some(position) = self
+            .bank_proposals
+            .iter()
+            .position(|proposal| proposal.id == proposal_id)
+        else {
+            self.bank_message = "Bankförslaget finns inte längre.".to_string();
+            return;
+        };
+        if self.bank_proposals[position].awaiting_player_index != player_index {
+            self.bank_message = "Det är inte din tur att svara på bankförslaget.".to_string();
+            return;
+        }
+
+        let proposal = self.bank_proposals[position].clone();
+        if let Some(error) = self.bank_proposal_error(&proposal) {
+            self.bank_message = error;
+            return;
+        }
+
+        self.apply_bank_proposal(&proposal);
+        self.bank_proposals.remove(position);
+        let summary = self.bank_proposal_summary(&proposal);
+        self.bank_message = format!("Banken verkställde: {summary}");
+        self.push_event(format!("Bankförslag accepterades: {summary}"));
+        self.push_bank_message(
+            "Banken",
+            &format!("Accepterat och verkställt: {summary}"),
+            true,
+        );
+    }
+
+    fn decline_bank_proposal(&mut self, player_name: &str, proposal_id: u64) {
+        let Some(player_index) = self.player_index_by_name(player_name) else {
+            self.bank_message = "Banken hittar inte spelaren för det här förslaget.".to_string();
+            return;
+        };
+        let Some(position) = self
+            .bank_proposals
+            .iter()
+            .position(|proposal| proposal.id == proposal_id)
+        else {
+            self.bank_message = "Bankförslaget finns inte längre.".to_string();
+            return;
+        };
+        if self.bank_proposals[position].awaiting_player_index != player_index {
+            self.bank_message = "Det är inte din tur att svara på bankförslaget.".to_string();
+            return;
+        }
+        let proposal = self.bank_proposals.remove(position);
+        let name = self.players[player_index].name.clone();
+        let summary = self.bank_proposal_summary(&proposal);
+        self.bank_message = format!("{name} avböjde bankförslaget.");
+        self.push_event(format!("{name} avböjde: {summary}"));
+        self.push_bank_message("Banken", &format!("{name} avböjde: {summary}"), true);
+    }
+
+    fn counter_bank_proposal(&mut self, player_name: &str, proposal_id: u64, amount: i32) {
+        let rules = load_bank_rules();
+        let Some(player_index) = self.player_index_by_name(player_name) else {
+            self.bank_message = "Banken hittar inte spelaren för motbudet.".to_string();
+            return;
+        };
+        let Some(position) = self
+            .bank_proposals
+            .iter()
+            .position(|proposal| proposal.id == proposal_id)
+        else {
+            self.bank_message = "Bankförslaget finns inte längre.".to_string();
+            return;
+        };
+        if self.bank_proposals[position].awaiting_player_index != player_index {
+            self.bank_message = "Det är inte din tur att lämna motbud.".to_string();
+            return;
+        }
+        if amount <= 0 || amount > rules.trade_cash_limit {
+            self.bank_message = format!(
+                "Motbudet måste vara mellan 1 och {} kr.",
+                rules.trade_cash_limit
+            );
+            return;
+        }
+
+        let other = if player_index == self.bank_proposals[position].requester_index {
+            self.bank_proposals[position].counterparty_index
+        } else {
+            self.bank_proposals[position].requester_index
+        };
+
+        if self.bank_proposals[position].kind == "player_loan" {
+            self.bank_proposals[position].cash_from_counterparty = amount;
+        } else {
+            self.bank_proposals[position].cash_from_requester = amount;
+        }
+        self.bank_proposals[position].awaiting_player_index = other;
+        self.bank_proposals[position].note = format!(
+            "Motbud från {}: {} kr.",
+            self.players[player_index].name, amount
+        );
+        let summary = self.bank_proposal_summary(&self.bank_proposals[position]);
+        self.bank_message = format!("Banken skickade motbudet vidare: {summary}");
+        self.push_event(format!("Motbud via banken: {summary}"));
+    }
+
+    fn bank_proposal_error(&self, proposal: &BankProposal) -> Option<String> {
+        if proposal.requester_index >= self.players.len()
+            || proposal.counterparty_index >= self.players.len()
+            || proposal.awaiting_player_index >= self.players.len()
+        {
+            return Some("Bankförslaget pekar på en okänd spelare.".to_string());
+        }
+        if self.players[proposal.requester_index].cash < proposal.cash_from_requester {
+            return Some(format!(
+                "{} har inte {} kr.",
+                self.players[proposal.requester_index].name, proposal.cash_from_requester
+            ));
+        }
+        if self.players[proposal.counterparty_index].cash < proposal.cash_from_counterparty {
+            return Some(format!(
+                "{} har inte {} kr.",
+                self.players[proposal.counterparty_index].name, proposal.cash_from_counterparty
+            ));
+        }
+        for space_index in &proposal.spaces_from_requester {
+            if self.owners.get(*space_index).copied().flatten() != Some(proposal.requester_index) {
+                return Some(format!(
+                    "{} äger inte {} längre.",
+                    self.players[proposal.requester_index].name,
+                    self.spaces
+                        .get(*space_index)
+                        .map(|space| space.name.as_str())
+                        .unwrap_or("rutan")
+                ));
+            }
+        }
+        for space_index in &proposal.spaces_from_counterparty {
+            if self.owners.get(*space_index).copied().flatten() != Some(proposal.counterparty_index)
+            {
+                return Some(format!(
+                    "{} äger inte {} längre.",
+                    self.players[proposal.counterparty_index].name,
+                    self.spaces
+                        .get(*space_index)
+                        .map(|space| space.name.as_str())
+                        .unwrap_or("rutan")
+                ));
+            }
+        }
+        None
+    }
+
+    fn apply_bank_proposal(&mut self, proposal: &BankProposal) {
+        if proposal.cash_from_requester > 0 {
+            self.players[proposal.requester_index].cash -= proposal.cash_from_requester;
+            self.players[proposal.counterparty_index].cash += proposal.cash_from_requester;
+        }
+        if proposal.cash_from_counterparty > 0 {
+            self.players[proposal.counterparty_index].cash -= proposal.cash_from_counterparty;
+            self.players[proposal.requester_index].cash += proposal.cash_from_counterparty;
+        }
+        for space_index in &proposal.spaces_from_requester {
+            if let Some(owner) = self.owners.get_mut(*space_index) {
+                *owner = Some(proposal.counterparty_index);
+            }
+        }
+        for space_index in &proposal.spaces_from_counterparty {
+            if let Some(owner) = self.owners.get_mut(*space_index) {
+                *owner = Some(proposal.requester_index);
+            }
+        }
+        self.resolve_negative_cash(proposal.requester_index);
+        self.resolve_negative_cash(proposal.counterparty_index);
+    }
+
+    fn bank_proposal_summary(&self, proposal: &BankProposal) -> String {
+        let requester = &self.players[proposal.requester_index].name;
+        let counterparty = &self.players[proposal.counterparty_index].name;
+        let mut parts = Vec::new();
+        if proposal.cash_from_requester > 0 {
+            parts.push(format!(
+                "{requester} betalar {} kr",
+                proposal.cash_from_requester
+            ));
+        }
+        if proposal.cash_from_counterparty > 0 {
+            parts.push(format!(
+                "{counterparty} betalar {} kr",
+                proposal.cash_from_counterparty
+            ));
+        }
+        let requester_spaces = self.space_names(&proposal.spaces_from_requester);
+        if !requester_spaces.is_empty() {
+            parts.push(format!("{requester} ger {requester_spaces}"));
+        }
+        let counterparty_spaces = self.space_names(&proposal.spaces_from_counterparty);
+        if !counterparty_spaces.is_empty() {
+            parts.push(format!("{counterparty} ger {counterparty_spaces}"));
+        }
+        if parts.is_empty() {
+            format!("{requester} och {counterparty} har ett tomt förslag")
+        } else {
+            parts.join(" · ")
+        }
+    }
+
+    fn space_names(&self, indexes: &[usize]) -> String {
+        indexes
+            .iter()
+            .filter_map(|index| self.spaces.get(*index))
+            .map(|space| space.name.clone())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn push_bank_proposal(&mut self, mut proposal: BankProposal) -> String {
+        proposal.id = self.next_bank_proposal_id;
+        self.next_bank_proposal_id += 1;
+        let summary = self.bank_proposal_summary(&proposal);
+        let awaiting = self.players[proposal.awaiting_player_index].name.clone();
+        self.bank_proposals.push(proposal);
+        self.push_event(format!(
+            "Banken skickade förslag till {awaiting}: {summary}"
+        ));
+        format!("Jag har skickat ett förslag till {awaiting}: {summary}.")
+    }
+
+    fn ask_bank(&mut self, player_name: &str, message: &str) -> Option<BankAsyncJob> {
         let player_name = clean_player_name(player_name);
         let message = clean_chat_message(message);
         if player_name.is_empty() {
@@ -1743,26 +2121,315 @@ impl GameState {
                 "Skriv ditt namn på mobilen först, så vet jag vem jag pratar med.",
                 true,
             );
-            return;
+            return None;
         }
         if message.is_empty() {
             self.push_bank_message("Banken", "Skriv en fråga till banken först.", true);
-            return;
+            return None;
         }
 
         self.push_bank_message(&player_name, &message, false);
-        let answer = match self.llm_bank_answer(&player_name, &message) {
-            Ok(answer) => {
-                self.bank_ai_status = llm_config_label();
-                answer
-            }
-            Err(error) => {
-                self.bank_ai_status = format!("mock fallback: {error}");
-                self.mock_bank_answer(&player_name, &message)
-            }
-        };
+        if let Some(answer) = self.try_bank_broker_action(&player_name, &message) {
+            self.bank_message = format!("Banken till {player_name}: {answer}");
+            self.push_bank_message("Banken", &answer, true);
+            return None;
+        }
+
+        let prompt = self.bank_prompt(&player_name, &message, &load_settings().preprompt);
+        let fallback_answer = self.mock_bank_answer(&player_name, &message);
+        let thinking = "Jag tänker en stund. Spelet fortsätter under tiden.";
+        self.bank_message = format!("Banken till {player_name}: {thinking}");
+        self.push_bank_message("Banken", thinking, true);
+        Some(BankAsyncJob {
+            player_name,
+            prompt,
+            fallback_answer,
+        })
+    }
+
+    fn finish_async_bank_answer(&mut self, player_name: &str, answer: &str, status: &str) {
+        self.bank_ai_status = status.to_string();
         self.bank_message = format!("Banken till {player_name}: {answer}");
-        self.push_bank_message("Banken", &answer, true);
+        self.push_bank_message("Banken", answer, true);
+    }
+
+    fn try_bank_broker_action(&mut self, player_name: &str, message: &str) -> Option<String> {
+        let requester_index = self.player_index_by_name(player_name)?;
+        let amount = extract_first_amount(message).unwrap_or(0);
+        let is_emergency_loan = looks_like_emergency_loan(message);
+        if is_emergency_loan {
+            return Some(self.handle_emergency_loan_request(requester_index, message));
+        }
+
+        let wants_offer = contains_any_word(message, &["bud", "buda", "köp", "köpa", "köper"]);
+        let wants_trade = contains_any_word(message, &["byt", "byte", "byta"]);
+        let wants_loan = contains_any_word(message, &["låna", "lån"]);
+        let wants_donation = contains_any_word(message, &["donera", "skänk", "ge"]) && amount > 0;
+        let wants_real_action = wants_offer || wants_trade || wants_loan || wants_donation;
+        if !wants_real_action {
+            return None;
+        }
+
+        if self.phase != Phase::Play || self.current_player_index != requester_index {
+            return Some(format!(
+                "Du kan chatta med mig när som helst, men riktiga bud, byten, lån och donationer gör vi på din tur. Nu är det {}s tur.",
+                self.players[self.current_selector_index()].name
+            ));
+        }
+
+        let rules = load_bank_rules();
+        if wants_donation {
+            return Some(self.create_donation_proposal(requester_index, message, amount, &rules));
+        }
+        if wants_loan && amount > 0 {
+            return Some(self.create_player_loan_proposal(
+                requester_index,
+                message,
+                amount,
+                &rules,
+            ));
+        }
+        if wants_trade {
+            return Some(self.create_trade_proposal(requester_index, message, amount, &rules));
+        }
+        if wants_offer {
+            return Some(self.create_cash_offer_proposal(requester_index, message, amount, &rules));
+        }
+
+        Some("Jag förstår att du vill göra något bankmässigt, men jag behöver spelare, belopp och/eller fastighetsnamn tydligare.".to_string())
+    }
+
+    fn handle_emergency_loan_request(&mut self, player_index: usize, message: &str) -> String {
+        let rules = load_bank_rules();
+        let requested = extract_first_amount(message).unwrap_or(rules.emergency_loan_limit);
+        let amount = requested.clamp(1, rules.emergency_loan_limit);
+        let player_name = self.players[player_index].name.clone();
+        let nags = self
+            .bank_chat
+            .iter()
+            .filter(|chat| {
+                !chat.from_bank
+                    && chat.speaker == player_name
+                    && looks_like_emergency_loan(&chat.text)
+            })
+            .count();
+        if nags < rules.emergency_loan_required_requests {
+            let remaining = rules.emergency_loan_required_requests.saturating_sub(nags);
+            return format!(
+                "Nödlån är hårt hållna. Jag hör dig, {player_name}, men tjata {} gång{} till om du verkligen behöver upp till {} kr.",
+                remaining,
+                if remaining == 1 { "" } else { "er" },
+                rules.emergency_loan_limit
+            );
+        }
+        self.players[player_index].cash += amount;
+        self.push_event(format!(
+            "{player_name} fick nödlån från banken: {amount} kr."
+        ));
+        format!(
+            "Okej. Banken ger {player_name} ett nödlån på {amount} kr. Det här är en husregel och bör användas sparsamt."
+        )
+    }
+
+    fn create_donation_proposal(
+        &mut self,
+        requester_index: usize,
+        message: &str,
+        amount: i32,
+        rules: &BankRules,
+    ) -> String {
+        if amount > rules.donation_limit {
+            return format!(
+                "Donationer är begränsade till {} kr i bankreglerna.",
+                rules.donation_limit
+            );
+        }
+        let Some(counterparty_index) = self.find_other_player_in_text(message, requester_index)
+        else {
+            return "Vem vill du ge pengar till? Skriv spelarens namn tydligt.".to_string();
+        };
+        self.push_bank_proposal(BankProposal {
+            id: 0,
+            kind: "donation".to_string(),
+            requester_index,
+            counterparty_index,
+            awaiting_player_index: counterparty_index,
+            cash_from_requester: amount,
+            cash_from_counterparty: 0,
+            spaces_from_requester: Vec::new(),
+            spaces_from_counterparty: Vec::new(),
+            note: "Donation via banken.".to_string(),
+        })
+    }
+
+    fn create_player_loan_proposal(
+        &mut self,
+        requester_index: usize,
+        message: &str,
+        amount: i32,
+        rules: &BankRules,
+    ) -> String {
+        if amount > rules.player_loan_limit {
+            return format!(
+                "Spelarlån är begränsade till {} kr i bankreglerna.",
+                rules.player_loan_limit
+            );
+        }
+        let Some(counterparty_index) = self.find_other_player_in_text(message, requester_index)
+        else {
+            return "Vem vill du låna pengar av? Skriv spelarens namn tydligt.".to_string();
+        };
+        self.push_bank_proposal(BankProposal {
+            id: 0,
+            kind: "player_loan".to_string(),
+            requester_index,
+            counterparty_index,
+            awaiting_player_index: counterparty_index,
+            cash_from_requester: 0,
+            cash_from_counterparty: amount,
+            spaces_from_requester: Vec::new(),
+            spaces_from_counterparty: Vec::new(),
+            note: "Lån mellan spelare via banken.".to_string(),
+        })
+    }
+
+    fn create_cash_offer_proposal(
+        &mut self,
+        requester_index: usize,
+        message: &str,
+        amount: i32,
+        rules: &BankRules,
+    ) -> String {
+        if amount > rules.trade_cash_limit {
+            return format!(
+                "Bud är begränsade till {} kr i bankreglerna.",
+                rules.trade_cash_limit
+            );
+        }
+        let Some(space_index) =
+            self.find_owned_space_in_text(message, Some(requester_index), false)
+        else {
+            return "Vilken fastighet vill du lägga bud på? Skriv gatunamnet tydligare."
+                .to_string();
+        };
+        let Some(counterparty_index) = self.owners[space_index] else {
+            return "Den fastigheten ägs inte av någon spelare just nu.".to_string();
+        };
+        let offer_amount = if amount > 0 {
+            amount
+        } else {
+            self.spaces[space_index].price.unwrap_or(1000)
+        };
+        if offer_amount > rules.trade_cash_limit {
+            return format!(
+                "Bud är begränsade till {} kr i bankreglerna.",
+                rules.trade_cash_limit
+            );
+        }
+        self.push_bank_proposal(BankProposal {
+            id: 0,
+            kind: "cash_offer".to_string(),
+            requester_index,
+            counterparty_index,
+            awaiting_player_index: counterparty_index,
+            cash_from_requester: offer_amount,
+            cash_from_counterparty: 0,
+            spaces_from_requester: Vec::new(),
+            spaces_from_counterparty: vec![space_index],
+            note: "Bud på fastighet via banken.".to_string(),
+        })
+    }
+
+    fn create_trade_proposal(
+        &mut self,
+        requester_index: usize,
+        message: &str,
+        amount: i32,
+        rules: &BankRules,
+    ) -> String {
+        if amount > rules.trade_cash_limit {
+            return format!(
+                "Kontantdel i byte är begränsad till {} kr i bankreglerna.",
+                rules.trade_cash_limit
+            );
+        }
+        let Some(counterparty_space) =
+            self.find_owned_space_in_text(message, Some(requester_index), false)
+        else {
+            return "Vilken fastighet vill du få i bytet? Skriv namnet tydligare.".to_string();
+        };
+        let Some(counterparty_index) = self.owners[counterparty_space] else {
+            return "Fastigheten du vill få ägs inte av någon spelare.".to_string();
+        };
+        let requester_space = self.find_owned_space_in_text(message, Some(requester_index), true);
+        self.push_bank_proposal(BankProposal {
+            id: 0,
+            kind: "property_trade".to_string(),
+            requester_index,
+            counterparty_index,
+            awaiting_player_index: counterparty_index,
+            cash_from_requester: amount.max(0),
+            cash_from_counterparty: 0,
+            spaces_from_requester: requester_space.into_iter().collect(),
+            spaces_from_counterparty: vec![counterparty_space],
+            note: "Byte via banken.".to_string(),
+        })
+    }
+
+    fn player_index_by_name(&self, player_name: &str) -> Option<usize> {
+        let target = normalize_lookup(player_name);
+        self.players
+            .iter()
+            .position(|player| normalize_lookup(&player.name) == target)
+    }
+
+    fn find_other_player_in_text(&self, text: &str, requester_index: usize) -> Option<usize> {
+        let normalized = normalize_lookup(text);
+        self.players
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != requester_index)
+            .filter_map(|(index, player)| {
+                let player_key = normalize_lookup(&player.name);
+                let numbered_key = format!("spelare{}", index + 1);
+                if normalized.contains(&player_key) || normalized.contains(&numbered_key) {
+                    Some((index, player_key.len().max(numbered_key.len())))
+                } else {
+                    None
+                }
+            })
+            .max_by_key(|(_, score)| *score)
+            .map(|(index, _)| index)
+    }
+
+    fn find_owned_space_in_text(
+        &self,
+        text: &str,
+        requester_index: Option<usize>,
+        owned_by_requester: bool,
+    ) -> Option<usize> {
+        let normalized = normalize_lookup(text);
+        self.spaces
+            .iter()
+            .filter(|space| matches!(space.kind.as_str(), "property" | "station" | "utility"))
+            .filter(|space| {
+                let owner = self.owners[space.index];
+                match (requester_index, owned_by_requester) {
+                    (Some(requester), true) => owner == Some(requester),
+                    (Some(requester), false) => owner.is_some() && owner != Some(requester),
+                    (None, _) => owner.is_some(),
+                }
+            })
+            .filter_map(|space| {
+                let key = normalize_lookup(&space.name);
+                if normalized.contains(&key) {
+                    Some((space.index, key.len()))
+                } else {
+                    None
+                }
+            })
+            .max_by_key(|(_, score)| *score)
+            .map(|(index, _)| index)
     }
 
     fn admin_bank_message(&mut self, message: &str) {
@@ -1788,25 +2455,6 @@ impl GameState {
         });
         if self.bank_chat.len() > 24 {
             self.bank_chat.remove(0);
-        }
-    }
-
-    fn llm_bank_answer(&self, player_name: &str, message: &str) -> Result<String, String> {
-        let llm_url =
-            env::var("EUTHERPAL_LLM_URL").map_err(|_| "EUTHERPAL_LLM_URL saknas".to_string())?;
-        if llm_url.trim().is_empty() || llm_url == "mock" {
-            return Err("LLM är satt till mock".to_string());
-        }
-        let settings = load_settings();
-        let model = llm_model_name(&settings);
-        let prompt = self.bank_prompt(player_name, message, &settings.preprompt);
-        let answer = call_ollama_generate(&llm_url, &model, &prompt)
-            .map_err(|error| error.to_string())
-            .map(|answer| clean_chat_message(&answer))?;
-        if answer.is_empty() {
-            Err("LLM gav tomt svar".to_string())
-        } else {
-            Ok(answer)
         }
     }
 
@@ -2045,7 +2693,7 @@ impl GameState {
             .join(",");
 
         format!(
-            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"freeParkingPot\":{},\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"assetActions\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}],\"bankChat\":[{}]}}",
+            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"freeParkingPot\":{},\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"assetActions\":[{}],\"bankProposals\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}],\"bankChat\":[{}]}}",
             escape_json(&self.room_code),
             self.phase.as_str(),
             escape_json(current),
@@ -2058,6 +2706,7 @@ impl GameState {
             self.drawn_card_json(),
             self.buildable_properties_json(),
             self.asset_actions_json(),
+            self.bank_proposals_json(),
             players,
             token_choices,
             spaces,
@@ -2174,6 +2823,47 @@ impl GameState {
                     can_mortgage,
                     can_unmortgage,
                     can_sell_building
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    fn bank_proposals_json(&self) -> String {
+        self.bank_proposals
+            .iter()
+            .map(|proposal| {
+                let requester = &self.players[proposal.requester_index].name;
+                let counterparty = &self.players[proposal.counterparty_index].name;
+                let awaiting = &self.players[proposal.awaiting_player_index].name;
+                format!(
+                    "{{\"id\":{},\"kind\":\"{}\",\"requester\":\"{}\",\"counterparty\":\"{}\",\"awaitingPlayer\":\"{}\",\"cashFromRequester\":{},\"cashFromCounterparty\":{},\"spacesFromRequester\":[{}],\"spacesFromCounterparty\":[{}],\"summary\":\"{}\",\"note\":\"{}\"}}",
+                    proposal.id,
+                    escape_json(&proposal.kind),
+                    escape_json(requester),
+                    escape_json(counterparty),
+                    escape_json(awaiting),
+                    proposal.cash_from_requester,
+                    proposal.cash_from_counterparty,
+                    self.proposal_spaces_json(&proposal.spaces_from_requester),
+                    self.proposal_spaces_json(&proposal.spaces_from_counterparty),
+                    escape_json(&self.bank_proposal_summary(proposal)),
+                    escape_json(&proposal.note)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    fn proposal_spaces_json(&self, indexes: &[usize]) -> String {
+        indexes
+            .iter()
+            .filter_map(|index| self.spaces.get(*index))
+            .map(|space| {
+                format!(
+                    "{{\"index\":{},\"name\":\"{}\"}}",
+                    space.index,
+                    escape_json(&space.name)
                 )
             })
             .collect::<Vec<_>>()
@@ -2452,6 +3142,21 @@ fn snapshot_unescape(value: &str) -> String {
     result
 }
 
+fn snapshot_usize_list(values: &[usize]) -> String {
+    values
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn parse_snapshot_usize_list(value: &str) -> Vec<usize> {
+    value
+        .split(',')
+        .filter_map(|part| part.parse::<usize>().ok())
+        .collect()
+}
+
 fn parse_bool(value: &str) -> bool {
     value == "true"
 }
@@ -2659,6 +3364,20 @@ fn load_settings() -> Settings {
     settings
 }
 
+fn load_bank_rules() -> BankRules {
+    let toml =
+        fs::read_to_string(BANK_RULES_PATH).unwrap_or_else(|_| DEFAULT_BANK_RULES_TOML.to_string());
+    BankRules {
+        emergency_loan_limit: toml_i32_value(&toml, "emergency_loan_limit").unwrap_or(1000),
+        emergency_loan_required_requests: toml_i32_value(&toml, "emergency_loan_required_requests")
+            .unwrap_or(2)
+            .max(1) as usize,
+        player_loan_limit: toml_i32_value(&toml, "player_loan_limit").unwrap_or(5000),
+        donation_limit: toml_i32_value(&toml, "donation_limit").unwrap_or(10000),
+        trade_cash_limit: toml_i32_value(&toml, "trade_cash_limit").unwrap_or(50000),
+    }
+}
+
 fn save_settings(settings: &Settings) -> std::io::Result<()> {
     if let Some(parent) = Path::new(SETTINGS_PATH).parent() {
         fs::create_dir_all(parent)?;
@@ -2677,6 +3396,13 @@ fn toml_string_value(toml: &str, key: &str) -> Option<String> {
                 .and_then(|value| value.strip_suffix('"'))
                 .map(|value| value.replace("\\\"", "\"").replace("\\\\", "\\"))
         })
+}
+
+fn toml_i32_value(toml: &str, key: &str) -> Option<i32> {
+    let prefix = format!("{key} = ");
+    toml.lines()
+        .find_map(|line| line.trim().strip_prefix(&prefix))
+        .and_then(|value| value.trim().parse::<i32>().ok())
 }
 
 fn toml_multiline_value(toml: &str, key: &str) -> Option<String> {
@@ -2718,6 +3444,52 @@ fn clean_chat_message(message: &str) -> String {
         .filter(|character| !character.is_control())
         .take(280)
         .collect()
+}
+
+fn normalize_lookup(value: &str) -> String {
+    value
+        .to_lowercase()
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+
+fn extract_first_amount(message: &str) -> Option<i32> {
+    let mut digits = String::new();
+    let mut started = false;
+
+    for character in message.chars() {
+        if character.is_ascii_digit() {
+            started = true;
+            digits.push(character);
+        } else if started && (character == ' ' || character == '.' || character == '_') {
+            continue;
+        } else if started {
+            break;
+        }
+    }
+
+    digits.parse::<i32>().ok()
+}
+
+fn looks_like_emergency_loan(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("nödlån")
+        || lower.contains("nødlån")
+        || lower.contains("nodlan")
+        || lower.contains("nöd lån")
+        || lower.contains("nödlana")
+        || lower.contains("akut lån")
+        || lower.contains("akutlån")
+        || (lower.contains("lån")
+            && (lower.contains("banken") || lower.contains("nöd") || lower.contains("akut")))
+}
+
+fn contains_any_word(message: &str, words: &[&str]) -> bool {
+    message
+        .to_lowercase()
+        .split(|character: char| !character.is_alphanumeric())
+        .any(|part| words.iter().any(|word| part == *word))
 }
 
 fn list_or_none(items: &[String]) -> String {
@@ -2864,7 +3636,9 @@ mod tests {
         let mut game = playable_game();
         game.players[0].name = "Maja".to_string();
 
-        game.ask_bank("Maja", "Var står jag?");
+        let job = game
+            .ask_bank("Maja", "Var står jag?")
+            .expect("casual bank chat should run asynchronously");
 
         assert!(
             game.bank_chat
@@ -2874,9 +3648,100 @@ mod tests {
         assert!(
             game.bank_chat
                 .iter()
-                .any(|message| message.from_bank && message.text.contains("Gå"))
+                .any(|message| message.from_bank && message.text.contains("tänker"))
         );
+        assert!(job.fallback_answer.contains("Gå"));
         assert!(game.bank_message.contains("Banken till Maja"));
+    }
+
+    #[test]
+    fn emergency_loan_requires_repeated_request_even_out_of_turn() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+        game.players[1].name = "Noel".to_string();
+        game.current_player_index = 1;
+        let cash_before = game.players[0].cash;
+
+        let first = game.ask_bank("Maja", "Jag behöver nödlån 1000 kr från banken");
+        assert!(first.is_none());
+        assert_eq!(game.players[0].cash, cash_before);
+        assert!(game.bank_message.contains("tjata"));
+
+        let second = game.ask_bank("Maja", "Nödlån 1000 kr från banken, snälla");
+        assert!(second.is_none());
+        assert_eq!(game.players[0].cash, cash_before + 1000);
+        assert!(game.bank_message.contains("nödlån på 1000 kr"));
+    }
+
+    #[test]
+    fn bank_chat_returns_async_job_without_blocking_game_actions() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+
+        let job = game
+            .ask_bank("Maja", "Kan du prata lite med mig medan de andra spelar?")
+            .expect("casual chat should be async");
+
+        assert!(job.prompt.contains("Maja"));
+        assert!(game.bank_message.contains("Spelet fortsätter"));
+        assert!(game.phase == Phase::Play);
+    }
+
+    #[test]
+    fn bank_creates_and_accepts_property_offer() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+        game.players[1].name = "Noel".to_string();
+        game.owners[23] = Some(1);
+        let maja_cash = game.players[0].cash;
+        let noel_cash = game.players[1].cash;
+
+        let job = game.ask_bank(
+            "Maja",
+            "Jag ser att Noel har Strandpromenaden. Lägg ett bud på 2200 kr.",
+        );
+
+        assert!(job.is_none());
+        assert_eq!(game.bank_proposals.len(), 1);
+        let proposal_id = game.bank_proposals[0].id;
+        assert_eq!(game.bank_proposals[0].awaiting_player_index, 1);
+        assert_eq!(game.bank_proposals[0].cash_from_requester, 2200);
+        assert_eq!(game.bank_proposals[0].spaces_from_counterparty, vec![23]);
+
+        game.accept_bank_proposal("Noel", proposal_id);
+
+        assert_eq!(game.owners[23], Some(0));
+        assert_eq!(game.players[0].cash, maja_cash - 2200);
+        assert_eq!(game.players[1].cash, noel_cash + 2200);
+        assert!(game.bank_proposals.is_empty());
+    }
+
+    #[test]
+    fn real_bank_broker_actions_wait_for_player_turn() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+        game.players[1].name = "Noel".to_string();
+        game.current_player_index = 1;
+        game.owners[23] = Some(1);
+
+        let job = game.ask_bank("Maja", "Lägg ett bud på Strandpromenaden");
+
+        assert!(job.is_none());
+        assert!(game.bank_proposals.is_empty());
+        assert!(game.bank_message.contains("riktiga bud"));
+    }
+
+    #[test]
+    fn street_name_with_kop_does_not_trigger_purchase_intent() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+
+        let job = game
+            .ask_bank("Maja", "Vad är hyran på Köpmangatan?")
+            .expect("street lookup should remain casual async chat");
+
+        assert!(game.bank_proposals.is_empty());
+        assert!(job.fallback_answer.contains("hyra") || job.fallback_answer.contains("Gå"));
     }
 
     #[test]

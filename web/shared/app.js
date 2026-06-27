@@ -252,6 +252,7 @@ function renderMobile(state) {
   renderJailControls(state, local);
   renderBuildControls(state, local);
   renderAssetControls(state, local);
+  renderBankProposalControls(state, local);
   renderBankChat(document.getElementById("bank-chat"), state.bankChat);
   bindMobileBankChat(state);
   document.getElementById("roll-button").onclick = (event) =>
@@ -399,6 +400,54 @@ function renderBankChat(container, messages) {
     .map((message) => `<div class="bank-chat-message ${message.fromBank ? "from-bank" : "from-player"}"><strong>${escapeHtml(message.speaker)}</strong><p>${escapeHtml(message.text)}</p></div>`)
     .join("");
   container.scrollTop = container.scrollHeight;
+}
+
+function renderBankProposalControls(state, localPlayer) {
+  const panel = document.getElementById("bank-proposal-panel");
+  if (!panel) return;
+  const localName = localPlayer?.name || localPlayerName();
+  const proposals = (state.bankProposals || []).filter((proposal) => proposal.awaitingPlayer === localName);
+  if (!localName || proposals.length === 0) {
+    panel.innerHTML = "";
+    return;
+  }
+
+  panel.innerHTML = `<h3>Bankförslag</h3>${proposals
+    .map((proposal) => `<div class="bank-proposal" data-proposal="${proposal.id}"><strong>${escapeHtml(proposal.summary)}</strong><p>${escapeHtml(proposal.note || "Väntar på ditt svar.")}</p>${proposalSpaces(proposal)}<div class="proposal-actions"><button type="button" data-proposal-action="accept" data-proposal-id="${proposal.id}" ${actionInFlight ? "disabled" : ""}>Acceptera</button><button type="button" data-proposal-action="decline" data-proposal-id="${proposal.id}" ${actionInFlight ? "disabled" : ""}>Avböj</button><input type="number" min="1" step="100" placeholder="Motbud kr" data-counter-amount><button type="button" data-proposal-action="counter" data-proposal-id="${proposal.id}" ${actionInFlight ? "disabled" : ""}>Motbud</button></div></div>`)
+    .join("")}`;
+
+  panel.querySelectorAll("button[data-proposal-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.dataset.proposalAction;
+      const body = new URLSearchParams({
+        player: localPlayerName(),
+        proposalId: button.dataset.proposalId,
+      });
+      let path = `/api/bank/proposal/${action}`;
+      if (action === "counter") {
+        const amount = button.closest(".bank-proposal")?.querySelector("[data-counter-amount]")?.value || "";
+        if (!amount) {
+          button.textContent = "Ange kr";
+          window.setTimeout(() => {
+            button.textContent = "Motbud";
+          }, 1000);
+          return;
+        }
+        body.set("amount", amount);
+      }
+      runMobileAction(button, "Skickar...", path, body.toString());
+    });
+  });
+}
+
+function proposalSpaces(proposal) {
+  const fromRequester = (proposal.spacesFromRequester || []).map((space) => space.name).join(", ");
+  const fromCounterparty = (proposal.spacesFromCounterparty || []).map((space) => space.name).join(", ");
+  const rows = [
+    fromRequester ? `${proposal.requester} ger ${fromRequester}` : "",
+    fromCounterparty ? `${proposal.counterparty} ger ${fromCounterparty}` : "",
+  ].filter(Boolean);
+  return rows.length ? `<ul>${rows.map((row) => `<li>${escapeHtml(row)}</li>`).join("")}</ul>` : "";
 }
 
 function renderBankThinking(container, messages, playerName, message) {
@@ -828,7 +877,7 @@ async function runMobileAction(button, loadingText, path, body) {
 
 function disableMobileActionButtons(disabled) {
   document
-    .querySelectorAll(".action-grid button, .auction-panel button, .asset-panel button, #token-buttons button, #jail-panel button")
+    .querySelectorAll(".action-grid button, .auction-panel button, .asset-panel button, .bank-proposal-panel button, #token-buttons button, #jail-panel button")
     .forEach((button) => {
       button.disabled = disabled;
     });

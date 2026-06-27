@@ -1,0 +1,6 @@
+# Regler för den levande banken. Servern läser denna fil vid bank-actions.
+emergency_loan_limit = 1000
+emergency_loan_required_requests = 2
+player_loan_limit = 5000
+donation_limit = 10000
+trade_cash_limit = 50000

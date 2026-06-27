@@ -658,6 +658,63 @@ body[data-view="mobile"] #mobile-events {
   display: none;
 }
 
+.bank-proposal-panel {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.bank-proposal-panel:empty {
+  display: none;
+}
+
+.bank-proposal-panel h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.bank-proposal {
+  display: grid;
+  gap: 8px;
+  border: 2px solid var(--yellow);
+  border-radius: 6px;
+  padding: 10px;
+  background: #2b2614;
+}
+
+.bank-proposal strong,
+.bank-proposal p {
+  margin: 0;
+}
+
+.bank-proposal p,
+.bank-proposal li {
+  color: var(--muted);
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.bank-proposal ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.proposal-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.proposal-actions input {
+  min-height: 40px;
+}
+
+.proposal-actions button {
+  min-height: 40px;
+}
+
 .bank-chat-message {
   display: grid;
   gap: 2px;
@@ -1000,7 +1057,8 @@ body[data-view="mobile"] #mobile-events {
 
 .action-grid button:disabled,
 .build-panel button:disabled,
-.asset-panel button:disabled {
+.asset-panel button:disabled,
+.bank-proposal-panel button:disabled {
   border-color: #504945;
   background: #3c3836;
   color: #928374;
