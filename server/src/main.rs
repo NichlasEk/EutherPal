@@ -1039,6 +1039,14 @@ impl GameState {
             self.bank_message = "Avsluta auktionen innan nästa tärningsslag.".to_string();
             return;
         }
+        if self.players[self.current_player_index].cash < 0 {
+            let player_name = self.players[self.current_player_index].name.clone();
+            let debt = -self.players[self.current_player_index].cash;
+            self.bank_message = format!(
+                "{player_name} ligger {debt} kr back. Sälj byggnader, inteckna, ta emot gåva/byte eller prata med banken om konkurs innan nästa tärningsslag."
+            );
+            return;
+        }
 
         self.dice = [self.roll_die(), self.roll_die()];
         self.drawn_card = None;
@@ -1381,12 +1389,10 @@ impl GameState {
     }
 
     fn sell_building(&mut self, space_index: usize, player_name: &str) {
-        if !self.is_authorized_current_player(player_name) {
+        let Some(player_index) = self.player_index_for_asset_action(player_name) else {
             return;
-        }
-        if space_index >= self.spaces.len()
-            || self.owners[space_index] != Some(self.current_player_index)
-        {
+        };
+        if space_index >= self.spaces.len() || self.owners[space_index] != Some(player_index) {
             self.bank_message = "Välj en egen gata med byggnad att sälja.".to_string();
             return;
         }
@@ -1396,8 +1402,8 @@ impl GameState {
         }
         let value = self.spaces[space_index].build_cost.unwrap_or(0) / 2;
         self.buildings[space_index] -= 1;
-        self.players[self.current_player_index].cash += value;
-        let player_name = self.players[self.current_player_index].name.clone();
+        self.players[player_index].cash += value;
+        let player_name = self.players[player_index].name.clone();
         let space_name = self.spaces[space_index].name.clone();
         self.bank_message =
             format!("{player_name} säljer en byggnadsnivå på {space_name} för {value} kr.");
@@ -1405,12 +1411,10 @@ impl GameState {
     }
 
     fn mortgage_property(&mut self, space_index: usize, player_name: &str) {
-        if !self.is_authorized_current_player(player_name) {
+        let Some(player_index) = self.player_index_for_asset_action(player_name) else {
             return;
-        }
-        if space_index >= self.spaces.len()
-            || self.owners[space_index] != Some(self.current_player_index)
-        {
+        };
+        if space_index >= self.spaces.len() || self.owners[space_index] != Some(player_index) {
             self.bank_message = "Välj en egen fastighet att inteckna.".to_string();
             return;
         }
@@ -1424,20 +1428,18 @@ impl GameState {
         }
         let value = self.mortgage_value(space_index);
         self.mortgaged[space_index] = true;
-        self.players[self.current_player_index].cash += value;
-        let player_name = self.players[self.current_player_index].name.clone();
+        self.players[player_index].cash += value;
+        let player_name = self.players[player_index].name.clone();
         let space_name = self.spaces[space_index].name.clone();
         self.bank_message = format!("{player_name} intecknar {space_name} och får {value} kr.");
         self.push_event(format!("{player_name} intecknade {space_name}."));
     }
 
     fn unmortgage_property(&mut self, space_index: usize, player_name: &str) {
-        if !self.is_authorized_current_player(player_name) {
+        let Some(player_index) = self.player_index_for_asset_action(player_name) else {
             return;
-        }
-        if space_index >= self.spaces.len()
-            || self.owners[space_index] != Some(self.current_player_index)
-        {
+        };
+        if space_index >= self.spaces.len() || self.owners[space_index] != Some(player_index) {
             self.bank_message = "Välj en egen intecknad fastighet att lösa.".to_string();
             return;
         }
@@ -1446,17 +1448,38 @@ impl GameState {
             return;
         }
         let cost = self.unmortgage_cost(space_index);
-        if self.players[self.current_player_index].cash < cost {
+        if self.players[player_index].cash < cost {
             self.bank_message = format!("Det kostar {cost} kr att lösa inteckningen.");
             return;
         }
-        self.players[self.current_player_index].cash -= cost;
+        self.players[player_index].cash -= cost;
         self.mortgaged[space_index] = false;
-        let player_name = self.players[self.current_player_index].name.clone();
+        let player_name = self.players[player_index].name.clone();
         let space_name = self.spaces[space_index].name.clone();
         self.bank_message =
             format!("{player_name} löser inteckningen på {space_name} för {cost} kr.");
         self.push_event(format!("{player_name} löste inteckningen på {space_name}."));
+    }
+
+    fn player_index_for_asset_action(&mut self, player_name: &str) -> Option<usize> {
+        if self.phase != Phase::Play {
+            self.bank_message =
+                "Fastighetsåtgärder kan bara göras när spelet är igång.".to_string();
+            return None;
+        }
+        if clean_player_name(player_name).is_empty() {
+            return Some(self.current_player_index);
+        }
+        let Some(player_index) = self.player_index_by_name(player_name) else {
+            self.bank_message = "Skriv ditt spelarnamn innan du ändrar fastigheter.".to_string();
+            return None;
+        };
+        if player_index == self.current_player_index || self.players[player_index].cash < 0 {
+            return Some(player_index);
+        }
+        self.bank_message =
+            "Du kan bara ändra fastigheter på din tur, eller när du ligger på minus.".to_string();
+        None
     }
 
     fn pay_player_to_free_parking_pot(&mut self, player_index: usize, amount: i32) {
@@ -1685,7 +1708,13 @@ impl GameState {
             self.push_event(format!("{name} ligger {debt} kr back."));
             return;
         }
-        self.declare_bankruptcy(player_index);
+        let name = self.players[player_index].name.clone();
+        self.bank_message.push_str(&format!(
+            " {name} ligger {debt} kr back och saknar täckning. Begär konkurs via banken eller försök få hjälp av andra spelare."
+        ));
+        self.push_event(format!(
+            "{name} ligger {debt} kr back och måste begära konkurs eller förhandla."
+        ));
     }
 
     fn declare_bankruptcy(&mut self, player_index: usize) {
@@ -1702,6 +1731,9 @@ impl GameState {
             }
         }
         self.pending_offer = None;
+        self.bank_proposals.retain(|proposal| {
+            proposal.requester_index != player_index && proposal.counterparty_index != player_index
+        });
         self.push_event(format!(
             "{name} gick i konkurs. Fastigheterna återgår till banken."
         ));
@@ -1709,6 +1741,63 @@ impl GameState {
         if self.current_player_index == player_index {
             self.advance_to_next_active_player();
         }
+    }
+
+    fn voluntary_exit_to_player(&mut self, player_index: usize, recipient_index: usize) -> String {
+        if player_index == recipient_index {
+            return "Du kan inte ge tillgångarna till dig själv när du går ur.".to_string();
+        }
+        if self.players[player_index].bankrupt {
+            return "Spelaren är redan ute ur spelet.".to_string();
+        }
+        if self.players[recipient_index].bankrupt {
+            return "Mottagaren är redan ute ur spelet.".to_string();
+        }
+
+        let player_name = self.players[player_index].name.clone();
+        let recipient_name = self.players[recipient_index].name.clone();
+        let mut transferred = Vec::new();
+        for index in 0..self.spaces.len() {
+            if self.owners[index] == Some(player_index) {
+                self.owners[index] = Some(recipient_index);
+                transferred.push(self.spaces[index].name.clone());
+            }
+        }
+        let cash = self.players[player_index].cash.max(0);
+        if cash > 0 {
+            self.players[recipient_index].cash += cash;
+        }
+        self.players[player_index].bankrupt = true;
+        self.players[player_index].token = None;
+        self.players[player_index].jailed = false;
+        self.players[player_index].cash = 0;
+        self.pending_offer = self
+            .pending_offer
+            .take()
+            .filter(|offer| offer.player_index != player_index);
+        self.bank_proposals.retain(|proposal| {
+            proposal.requester_index != player_index && proposal.counterparty_index != player_index
+        });
+        if self.current_player_index == player_index {
+            self.advance_to_next_active_player();
+        }
+
+        let asset_text = if transferred.is_empty() {
+            "inga fastigheter".to_string()
+        } else {
+            transferred.join(", ")
+        };
+        let cash_text = if cash > 0 {
+            format!(" och {cash} kr")
+        } else {
+            String::new()
+        };
+        self.push_event(format!(
+            "{player_name} gick ur spelet och gav {asset_text}{cash_text} till {recipient_name}."
+        ));
+        format!(
+            "{player_name} går ur spelet. {recipient_name} tar över {asset_text}{cash_text}. Det här är frivilligt utträde, inte vanlig konkurs."
+        )
     }
 
     fn advance_to_next_active_player(&mut self) {
@@ -2160,6 +2249,9 @@ impl GameState {
         if is_emergency_loan {
             return Some(self.handle_emergency_loan_request(requester_index, message));
         }
+        if looks_like_exit_or_bankruptcy(message) {
+            return Some(self.handle_exit_or_bankruptcy_request(requester_index, message));
+        }
 
         let wants_offer = contains_any_word(message, &["bud", "buda", "köp", "köpa", "köper"]);
         let wants_trade = contains_any_word(message, &["byt", "byte", "byta"]);
@@ -2197,6 +2289,20 @@ impl GameState {
         }
 
         Some("Jag förstår att du vill göra något bankmässigt, men jag behöver spelare, belopp och/eller fastighetsnamn tydligare.".to_string())
+    }
+
+    fn handle_exit_or_bankruptcy_request(&mut self, player_index: usize, message: &str) -> String {
+        if let Some(recipient_index) = self.find_other_player_in_text(message, player_index) {
+            return self.voluntary_exit_to_player(player_index, recipient_index);
+        }
+        if contains_any_word(message, &["konkurs"]) {
+            let player_name = self.players[player_index].name.clone();
+            self.declare_bankruptcy(player_index);
+            return format!(
+                "{player_name} begär konkurs. Alla fastigheter återgår till banken och blir tillgängliga för öppet köp."
+            );
+        }
+        "Vill du gå ur frivilligt och ge bort tillgångar behöver du skriva mottagarens namn, till exempel: jag går ur och ger allt till Noel.".to_string()
     }
 
     fn handle_emergency_loan_request(&mut self, player_index: usize, message: &str) -> String {
@@ -2801,19 +2907,21 @@ impl GameState {
         if self.phase == Phase::TokenSelection || self.auction.is_some() {
             return String::new();
         }
-        let player_index = self.current_player_index;
         self.spaces
             .iter()
-            .filter(|space| self.owners[space.index] == Some(player_index))
+            .filter_map(|space| self.owners[space.index].map(|owner| (space, owner)))
+            .filter(|(_, owner)| *owner == self.current_player_index || self.players[*owner].cash < 0)
             .map(|space| {
+                let (space, player_index) = space;
                 let can_mortgage = !self.mortgaged[space.index] && !self.has_buildings_in_group(space.index);
                 let can_unmortgage = self.mortgaged[space.index]
                     && self.players[player_index].cash >= self.unmortgage_cost(space.index);
                 let can_sell_building = self.buildings[space.index] > 0;
                 format!(
-                    "{{\"spaceIndex\":{},\"spaceName\":\"{}\",\"kind\":\"{}\",\"buildings\":{},\"mortgaged\":{},\"mortgageValue\":{},\"unmortgageCost\":{},\"sellValue\":{},\"canMortgage\":{},\"canUnmortgage\":{},\"canSellBuilding\":{}}}",
+                    "{{\"spaceIndex\":{},\"spaceName\":\"{}\",\"owner\":\"{}\",\"kind\":\"{}\",\"buildings\":{},\"mortgaged\":{},\"mortgageValue\":{},\"unmortgageCost\":{},\"sellValue\":{},\"canMortgage\":{},\"canUnmortgage\":{},\"canSellBuilding\":{}}}",
                     space.index,
                     escape_json(&space.name),
+                    escape_json(&self.players[player_index].name),
                     escape_json(&space.kind),
                     self.buildings[space.index],
                     self.mortgaged[space.index],
@@ -3485,6 +3593,19 @@ fn looks_like_emergency_loan(message: &str) -> bool {
             && (lower.contains("banken") || lower.contains("nöd") || lower.contains("akut")))
 }
 
+fn looks_like_exit_or_bankruptcy(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    contains_any_word(message, &["konkurs"])
+        || lower.contains("gå ur")
+        || lower.contains("gar ur")
+        || lower.contains("går ur")
+        || lower.contains("lämna spelet")
+        || lower.contains("lamna spelet")
+        || lower.contains("hoppa av")
+        || lower.contains("ger upp")
+        || lower.contains("ge upp")
+}
+
 fn contains_any_word(message: &str, words: &[&str]) -> bool {
     message
         .to_lowercase()
@@ -3742,6 +3863,77 @@ mod tests {
 
         assert!(game.bank_proposals.is_empty());
         assert!(job.fallback_answer.contains("hyra") || job.fallback_answer.contains("Gå"));
+    }
+
+    #[test]
+    fn negative_player_cannot_roll_until_debt_is_resolved() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+        game.players[0].cash = -200;
+
+        game.roll_current_player("Maja");
+
+        assert_eq!(game.players[0].position, 0);
+        assert!(game.bank_message.contains("back"));
+        assert!(game.bank_message.contains("nästa tärningsslag"));
+    }
+
+    #[test]
+    fn negative_player_can_mortgage_assets_out_of_turn() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+        game.players[1].name = "Noel".to_string();
+        game.current_player_index = 1;
+        game.players[0].cash = -200;
+        game.owners[1] = Some(0);
+
+        game.mortgage_property(1, "Maja");
+
+        assert!(game.mortgaged[1]);
+        assert_eq!(game.players[0].cash, 100);
+    }
+
+    #[test]
+    fn unresolved_debt_does_not_auto_bankrupt_player() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+        game.players[0].cash = -20_000;
+
+        game.resolve_negative_cash(0);
+
+        assert!(!game.players[0].bankrupt);
+        assert!(game.bank_message.contains("Begär konkurs"));
+    }
+
+    #[test]
+    fn bank_bankruptcy_returns_assets_to_bank() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+        game.players[0].cash = -500;
+        game.owners[23] = Some(0);
+
+        let job = game.ask_bank("Maja", "Jag går i konkurs");
+
+        assert!(job.is_none());
+        assert!(game.players[0].bankrupt);
+        assert_eq!(game.owners[23], None);
+        assert!(game.bank_message.contains("återgår till banken"));
+    }
+
+    #[test]
+    fn voluntary_exit_can_give_assets_to_named_player() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+        game.players[1].name = "Noel".to_string();
+        game.players[0].cash = -500;
+        game.owners[23] = Some(0);
+
+        let job = game.ask_bank("Maja", "Jag går ur spelet och ger allt till Noel");
+
+        assert!(job.is_none());
+        assert!(game.players[0].bankrupt);
+        assert_eq!(game.owners[23], Some(1));
+        assert!(game.bank_message.contains("frivilligt utträde"));
     }
 
     #[test]

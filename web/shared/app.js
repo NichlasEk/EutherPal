@@ -63,7 +63,7 @@ function startPolling(view) {
   const tick = async () => {
     const startedAt = Date.now();
     try {
-      if (view === "mobile" && actionInFlight) return;
+      if (view === "mobile" && (actionInFlight || mobileInputBusy())) return;
       const freshState = await fetchState();
       if (view === "tv") renderTv(freshState);
       if (view === "admin") renderAdmin(freshState);
@@ -80,6 +80,13 @@ function startPolling(view) {
   };
 
   window.setTimeout(tick, interval);
+}
+
+function mobileInputBusy() {
+  if (document.body.dataset.view !== "mobile") return false;
+  const active = document.activeElement;
+  if (!active) return false;
+  return active.matches("input, textarea") || active.isContentEditable;
 }
 
 function renderTv(state) {
@@ -664,16 +671,18 @@ function renderOfferControls(state, localPlayer) {
   const offer = state.pendingOffer;
   const isLocalTurn = localPlayer?.name === state.currentPlayer;
   const offerForLocal = Boolean(offer && localPlayer?.name === offer.player);
+  const localDebt = Number(localPlayer?.cash || 0) < 0;
 
   buyButton.disabled = !offerForLocal;
   declineButton.disabled = !offerForLocal;
-  rollButton.disabled = !isLocalTurn || Boolean(offer) || Boolean(state.auction) || state.phase === "token_selection";
+  rollButton.disabled = !isLocalTurn || localDebt || Boolean(offer) || Boolean(state.auction) || state.phase === "token_selection";
   if (actionInFlight) {
     buyButton.disabled = true;
     declineButton.disabled = true;
     rollButton.disabled = true;
   }
-  if (localPlayer?.jailed) rollButton.textContent = "Slå för dubbel";
+  if (localDebt) rollButton.textContent = "Lös skuld först";
+  else if (localPlayer?.jailed) rollButton.textContent = "Slå för dubbel";
   else rollButton.textContent = "Kasta tärning";
 
   if (offer) {
@@ -777,12 +786,13 @@ function renderAssetControls(state, localPlayer) {
   const summary = document.getElementById("asset-summary");
   if (!panel) return;
   const isLocalTurn = localPlayer?.name === state.currentPlayer;
+  const canUseAssetActions = isLocalTurn || Number(localPlayer?.cash || 0) < 0;
   const actionMap = new Map((state.assetActions || []).map((action) => [Number(action.spaceIndex), action]));
   const owned = localPlayer
     ? state.spaces
         .filter((space) => space.owner === localPlayer.name)
         .map((space) => {
-          const action = isLocalTurn ? actionMap.get(Number(space.index)) : null;
+          const action = canUseAssetActions ? actionMap.get(Number(space.index)) : null;
           return {
             spaceIndex: space.index,
             spaceName: space.name,
@@ -809,7 +819,7 @@ function renderAssetControls(state, localPlayer) {
     summary.textContent = `${owned.length} fastigheter · pantvärde ${totalValue} kr${localPlayer.cash < 0 ? ` · skuld ${Math.abs(localPlayer.cash)} kr` : ""}`;
   }
   panel.innerHTML = `${localPlayer.cash < 0 ? `<p class="debt">Du ligger ${Math.abs(localPlayer.cash)} kr back. Sälj byggnad eller inteckna.</p>` : ""}${owned
-    .map((action) => `<div class="asset-row asset-color-${escapeHtml(action.color)}"><div class="asset-title"><strong>${escapeHtml(action.spaceName)}</strong><span>${assetStateLabel(action)}</span></div><div class="asset-buttons"><button type="button" data-action="mortgage" data-space="${action.spaceIndex}" ${isLocalTurn && action.canMortgage && !actionInFlight ? "" : "disabled"}>Inteckna +${action.mortgageValue}</button><button type="button" data-action="unmortgage" data-space="${action.spaceIndex}" ${isLocalTurn && action.canUnmortgage && !actionInFlight ? "" : "disabled"}>Lös ${action.unmortgageCost}</button><button type="button" data-action="sell-building" data-space="${action.spaceIndex}" ${isLocalTurn && action.canSellBuilding && !actionInFlight ? "" : "disabled"}>Sälj byggnad +${action.sellValue}</button></div></div>`)
+    .map((action) => `<div class="asset-row asset-color-${escapeHtml(action.color)}"><div class="asset-title"><strong>${escapeHtml(action.spaceName)}</strong><span>${assetStateLabel(action)}</span></div><div class="asset-buttons"><button type="button" data-action="mortgage" data-space="${action.spaceIndex}" ${canUseAssetActions && action.canMortgage && !actionInFlight ? "" : "disabled"}>Inteckna +${action.mortgageValue}</button><button type="button" data-action="unmortgage" data-space="${action.spaceIndex}" ${canUseAssetActions && action.canUnmortgage && !actionInFlight ? "" : "disabled"}>Lös ${action.unmortgageCost}</button><button type="button" data-action="sell-building" data-space="${action.spaceIndex}" ${canUseAssetActions && action.canSellBuilding && !actionInFlight ? "" : "disabled"}>Sälj byggnad +${action.sellValue}</button></div></div>`)
     .join("")}`;
   panel.querySelectorAll("button[data-action]").forEach((button) => {
     button.addEventListener("click", () => {
