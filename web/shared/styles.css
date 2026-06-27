@@ -1026,8 +1026,8 @@ body[data-view="mobile"] #mobile-events {
 }
 
 body[data-view="tv"] .tv-shell {
-  grid-template-columns: minmax(0, 1fr) clamp(210px, 17vw, 260px);
-  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) clamp(204px, 16vw, 252px);
+  gap: 4px;
   padding: 4px 8px 8px;
 }
 
@@ -1037,8 +1037,9 @@ body[data-view="tv"] .board-wrap {
 }
 
 body[data-view="tv"] .board {
-  width: min(calc(100dvh - 16px), calc(100vw - clamp(232px, 18vw, 292px)));
+  width: min(calc(114dvh - 18px), calc(100vw - clamp(226px, 17vw, 282px)));
   min-width: 0;
+  aspect-ratio: 1.14 / 1;
   border-width: 3px;
 }
 
