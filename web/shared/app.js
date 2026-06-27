@@ -127,7 +127,10 @@ function tileContent(space, players, position) {
 }
 
 function tvTileMeta(space) {
-  if (space.mortgaged) return "Intecknad";
+  const rent = space.currentRent || space.rent;
+  if (space.mortgaged) return rent ? `Intecknad · Hyra ${rent} kr` : "Intecknad";
+  if (space.owner) return rent ? `Ägs ${space.owner} · Hyra ${rent} kr` : `Ägs ${space.owner}`;
+  if (space.price) return rent ? `${space.price} kr · Hyra ${rent} kr` : `${space.price} kr`;
   return "";
 }
 

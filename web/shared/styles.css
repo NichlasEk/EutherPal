@@ -181,7 +181,7 @@ textarea {
 
 .tile-copy {
   position: absolute;
-  inset: 13px 4px 22px;
+  inset: 13px 4px 5px;
   z-index: 1;
   display: grid;
   align-content: center;
@@ -219,16 +219,16 @@ textarea {
 
 .tokens {
   position: absolute;
-  right: 2px;
-  bottom: 2px;
-  left: 2px;
+  inset: 0;
   z-index: 5;
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   justify-content: center;
   align-items: center;
+  align-content: center;
   gap: 2px;
-  min-height: 15px;
+  min-height: 0;
+  padding: 2px;
   pointer-events: none;
 }
 
@@ -963,18 +963,18 @@ body[data-view="mobile"] #mobile-events {
 }
 
 body[data-view="tv"] .tv-shell {
-  grid-template-columns: minmax(0, 1fr) clamp(236px, 17vw, 292px);
-  gap: 8px;
-  padding: 10px 14px 24px;
+  grid-template-columns: minmax(0, 1fr) clamp(210px, 17vw, 260px);
+  gap: 6px;
+  padding: 4px 8px 8px;
 }
 
 body[data-view="tv"] .board-wrap {
-  min-height: calc(100dvh - 34px);
+  min-height: calc(100dvh - 12px);
   justify-items: center;
 }
 
 body[data-view="tv"] .board {
-  width: min(calc(100dvh - 58px), calc(100vw - clamp(280px, 20vw, 350px)));
+  width: min(calc(100dvh - 16px), calc(100vw - clamp(232px, 18vw, 292px)));
   min-width: 0;
   border-width: 3px;
 }
@@ -1013,8 +1013,8 @@ body[data-view="tv"] .tile {
 }
 
 body[data-view="tv"] .tile-copy {
-  inset: 12px 4px 24px;
-  gap: 2px;
+  inset: 11px 3px 4px;
+  gap: 1px;
 }
 
 body[data-view="tv"] .corner .tile-copy,
@@ -1027,28 +1027,30 @@ body[data-view="tv"] .tax .tile-copy {
 }
 
 body[data-view="tv"] .tile-name {
-  display: -webkit-box;
+  display: block;
   overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-  font-size: 11px;
+  font-size: clamp(7.2px, 1.16dvh, 10px);
   font-weight: 900;
-  line-height: 1.02;
+  line-height: 1.04;
   overflow-wrap: anywhere;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
 }
 
 body[data-view="tv"] .tile-meta {
   color: #d5c4a1;
-  font-size: 6.5px;
+  font-size: clamp(5.8px, 0.86dvh, 7.4px);
   font-weight: 900;
-  line-height: 1;
+  line-height: 1.04;
+  overflow-wrap: anywhere;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
 }
 
 body[data-view="tv"] .tokens {
-  min-height: 23px;
-  gap: 2px;
+  inset: 0;
+  min-height: 0;
+  gap: 3px;
+  padding: 3px;
+  z-index: 7;
 }
 
 body[data-view="tv"] .tokens .token-mini {
@@ -1090,26 +1092,26 @@ body[data-view="tv"] .buildings.hotel span {
 }
 
 body[data-view="tv"] .side-panel {
-  gap: 5px;
-  max-height: calc(100dvh - 34px);
-  font-size: 0.68rem;
+  gap: 4px;
+  max-height: calc(100dvh - 12px);
+  font-size: 0.62rem;
   scrollbar-width: thin;
 }
 
 body[data-view="tv"] .side-panel .panel-block {
   border-width: 2px;
   border-radius: 6px;
-  padding: 6px 8px;
+  padding: 5px 7px;
 }
 
 body[data-view="tv"] .panel-block h2 {
   margin-bottom: 3px;
-  font-size: 0.96rem;
+  font-size: 0.88rem;
   line-height: 1;
 }
 
 body[data-view="tv"] .current-player {
-  font-size: 1.28rem;
+  font-size: 1.12rem;
   line-height: 1;
 }
 
