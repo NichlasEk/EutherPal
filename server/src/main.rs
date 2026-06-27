@@ -26,6 +26,7 @@ const DEFAULT_MODEL: &str = "supergemma";
 const DEFAULT_PLAYER_COUNT: usize = 4;
 const MIN_PLAYER_COUNT: usize = 2;
 const MAX_PLAYER_COUNT: usize = 5;
+const GO_SALARY: i32 = 2000;
 const JAIL_FINE: i32 = 500;
 const AUCTION_MIN_MS: u128 = 20_000;
 
@@ -129,6 +130,7 @@ struct GameState {
     drawn_card: Option<DrawnCard>,
     bank_chat: Vec<BankChatMessage>,
     events: Vec<String>,
+    free_parking_pot: i32,
     bank_message: String,
     bank_ai_status: String,
 }
@@ -194,7 +196,7 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
         ("GET", "/health") => {
             let game = game.lock().expect("game state lock");
             json(200, &health_json(&game))
-        },
+        }
         ("GET", "/api/game") | ("GET", "/api/game/mock") => {
             let game = game.lock().expect("game state lock");
             json(200, &game.to_json())
@@ -532,6 +534,7 @@ impl GameState {
                 from_bank: true,
             }],
             events: vec![format!("{first_name} börjar och väljer pjäs först.")],
+            free_parking_pot: 0,
             bank_message: format!(
                 "{first_name} börjar och väljer pjäs först. Välj en av de fem klassiska pjäserna."
             ),
@@ -570,6 +573,7 @@ impl GameState {
         game.buildings[23] = 2;
         game.mortgaged[5] = true;
         game.dice = [3, 4];
+        game.free_parking_pot = 1300;
         game.events = vec![
             "Demo-läge startat.".to_string(),
             "Maja äger bruna gruppen och Lindesberg C är intecknad.".to_string(),
@@ -653,6 +657,7 @@ impl GameState {
             "cards\t{}\t{}",
             self.next_chance, self.next_community
         ));
+        lines.push(format!("pot\t{}", self.free_parking_pot));
         if let Some(offer) = &self.pending_offer {
             lines.push(format!(
                 "pending\t{}\t{}",
@@ -743,6 +748,9 @@ impl GameState {
                 }
                 "rng" if parts.len() >= 2 => {
                     game.rng_state = parts[1].parse().ok()?;
+                }
+                "pot" if parts.len() >= 2 => {
+                    game.free_parking_pot = parts[1].parse().ok()?;
                 }
                 "pending" if parts.len() >= 3 => {
                     game.pending_offer = Some(PendingOffer {
@@ -899,15 +907,15 @@ impl GameState {
             } else {
                 self.players[self.current_player_index].jail_turns += 1;
                 if self.players[self.current_player_index].jail_turns >= 3 {
-                    self.players[self.current_player_index].cash -= JAIL_FINE;
+                    self.pay_player_to_free_parking_pot(self.current_player_index, JAIL_FINE);
                     self.players[self.current_player_index].jailed = false;
                     self.players[self.current_player_index].jail_turns = 0;
                     self.bank_message = format!(
-                        "{player_name} slog inte dubbel tredje gången och betalar {JAIL_FINE} kr för att lämna fängelset."
+                        "{player_name} slog inte dubbel tredje gången och betalar {JAIL_FINE} kr till Fri parkering-potten."
                     );
                     self.push_event(format!(
-                        "{player_name} betalade {JAIL_FINE} kr efter tre misslyckade fängelsekast."
-                    ));
+                            "{player_name} betalade {JAIL_FINE} kr till Fri parkering-potten efter tre misslyckade fängelsekast."
+                        ));
                     self.resolve_negative_cash(self.current_player_index);
                 } else {
                     self.bank_message = format!(
@@ -921,15 +929,17 @@ impl GameState {
             }
         }
         let steps = (self.dice[0] + self.dice[1]) as usize;
-        let player = &mut self.players[self.current_player_index];
-        let old_position = player.position;
-        player.position = (player.position + steps) % self.spaces.len();
-        if old_position + steps >= self.spaces.len() {
-            player.cash += 2000;
+        let player_index = self.current_player_index;
+        let old_position = self.players[player_index].position;
+        let board_size = self.spaces.len();
+        let passed_go = old_position + steps >= board_size;
+        self.players[player_index].position = (old_position + steps) % board_size;
+        if passed_go {
+            self.players[player_index].cash += GO_SALARY;
         }
-        let player_name = player.name.clone();
+        let player_name = self.players[player_index].name.clone();
 
-        let landed_index = player.position;
+        let landed_index = self.players[player_index].position;
         let landed = self.spaces[landed_index].clone();
         self.bank_message = format!(
             "{} slog {} + {} och går till {}.",
@@ -939,6 +949,13 @@ impl GameState {
             "{} slog {} + {} och gick till {}.",
             player_name, self.dice[0], self.dice[1], landed.name
         ));
+        if passed_go {
+            self.bank_message
+                .push_str(&format!(" Banken betalar {GO_SALARY} kr för Gå."));
+            self.push_event(format!(
+                "{player_name} fick {GO_SALARY} kr av banken för Gå."
+            ));
+        }
         let mut force_end_turn = false;
 
         if landed.is_buyable() {
@@ -978,14 +995,27 @@ impl GameState {
 
         if landed.kind == "tax" {
             let amount = landed.amount.unwrap_or(0);
-            self.players[self.current_player_index].cash -= amount;
+            self.pay_player_to_free_parking_pot(self.current_player_index, amount);
             self.bank_message
-                .push_str(&format!(" Betala {} kr till banken.", amount));
+                .push_str(&format!(" Betala {} kr till Fri parkering-potten.", amount));
             self.push_event(format!(
-                "{player_name} betalade {} kr i {}.",
+                "{player_name} betalade {} kr i {} till Fri parkering-potten.",
                 amount, landed.name
             ));
             self.resolve_negative_cash(self.current_player_index);
+        } else if landed.kind == "free_parking" {
+            let payout = self.collect_free_parking_pot(self.current_player_index);
+            if payout > 0 {
+                self.bank_message
+                    .push_str(&format!(" Fri parkering betalar ut potten: {} kr.", payout));
+                self.push_event(format!(
+                    "{player_name} fick {} kr från Fri parkering-potten.",
+                    payout
+                ));
+            } else {
+                self.bank_message
+                    .push_str(" Fri parkering-potten är tom just nu.");
+            }
         } else if landed.kind == "go_to_jail" {
             let target = landed.target.unwrap_or(10);
             self.players[self.current_player_index].position = target;
@@ -1130,9 +1160,8 @@ impl GameState {
         let seconds_left = auction_seconds_left(auction_view);
         if seconds_left > 0 {
             let space_name = self.spaces[auction_view.space_index].name.clone();
-            self.bank_message = format!(
-                "Auktionen på {space_name} är öppen i {seconds_left} sekunder till."
-            );
+            self.bank_message =
+                format!("Auktionen på {space_name} är öppen i {seconds_left} sekunder till.");
             return;
         }
 
@@ -1282,6 +1311,26 @@ impl GameState {
         self.push_event(format!("{player_name} löste inteckningen på {space_name}."));
     }
 
+    fn pay_player_to_free_parking_pot(&mut self, player_index: usize, amount: i32) {
+        if amount <= 0 || player_index >= self.players.len() {
+            return;
+        }
+        self.players[player_index].cash -= amount;
+        self.free_parking_pot += amount;
+    }
+
+    fn collect_free_parking_pot(&mut self, player_index: usize) -> i32 {
+        if player_index >= self.players.len() {
+            return 0;
+        }
+        let payout = self.free_parking_pot;
+        if payout > 0 {
+            self.players[player_index].cash += payout;
+            self.free_parking_pot = 0;
+        }
+        payout
+    }
+
     fn pay_jail_fine(&mut self, player_name: &str) {
         if !self.is_authorized_current_player(player_name) {
             return;
@@ -1295,12 +1344,16 @@ impl GameState {
                 format!("Du behöver {JAIL_FINE} kr för att betala dig ur fängelset.");
             return;
         }
-        self.players[self.current_player_index].cash -= JAIL_FINE;
+        self.pay_player_to_free_parking_pot(self.current_player_index, JAIL_FINE);
         self.players[self.current_player_index].jailed = false;
         self.players[self.current_player_index].jail_turns = 0;
         let player_name = self.players[self.current_player_index].name.clone();
-        self.bank_message = format!("{player_name} betalar {JAIL_FINE} kr och lämnar fängelset.");
-        self.push_event(format!("{player_name} betalade sig ur fängelset."));
+        self.bank_message = format!(
+            "{player_name} betalar {JAIL_FINE} kr till Fri parkering-potten och lämnar fängelset."
+        );
+        self.push_event(format!(
+            "{player_name} betalade sig ur fängelset. {JAIL_FINE} kr gick till Fri parkering-potten."
+        ));
     }
 
     fn is_authorized_current_player(&mut self, player_name: &str) -> bool {
@@ -1577,17 +1630,21 @@ impl GameState {
                 let amount = card.amount.unwrap_or(0);
                 self.players[player_index].cash += amount;
                 self.push_event(format!(
-                    "{} fick {} kr.",
+                    "{} fick {} kr av banken.",
                     self.players[player_index].name, amount
                 ));
                 false
             }
             "pay_money" => {
                 let amount = card.amount.unwrap_or(0);
-                self.players[player_index].cash -= amount;
+                self.pay_player_to_free_parking_pot(player_index, amount);
                 self.push_event(format!(
-                    "{} betalade {} kr.",
+                    "{} betalade {} kr till Fri parkering-potten.",
                     self.players[player_index].name, amount
+                ));
+                self.bank_message.push_str(&format!(
+                    " Pengarna går till Fri parkering-potten, som nu är {} kr.",
+                    self.free_parking_pot
                 ));
                 self.resolve_negative_cash(player_index);
                 false
@@ -1596,7 +1653,14 @@ impl GameState {
                 let target = card.target.unwrap_or(0);
                 let old_position = self.players[player_index].position;
                 if target <= old_position {
-                    self.players[player_index].cash += card.amount.unwrap_or(0);
+                    let amount = card.amount.unwrap_or(GO_SALARY);
+                    self.players[player_index].cash += amount;
+                    self.bank_message
+                        .push_str(&format!(" Banken betalar {} kr för Gå.", amount));
+                    self.push_event(format!(
+                        "{} fick {} kr av banken för Gå.",
+                        self.players[player_index].name, amount
+                    ));
                 }
                 self.players[player_index].position = target;
                 let target_name = self
@@ -1728,8 +1792,8 @@ impl GameState {
     }
 
     fn llm_bank_answer(&self, player_name: &str, message: &str) -> Result<String, String> {
-        let llm_url = env::var("EUTHERPAL_LLM_URL")
-            .map_err(|_| "EUTHERPAL_LLM_URL saknas".to_string())?;
+        let llm_url =
+            env::var("EUTHERPAL_LLM_URL").map_err(|_| "EUTHERPAL_LLM_URL saknas".to_string())?;
         if llm_url.trim().is_empty() || llm_url == "mock" {
             return Err("LLM är satt till mock".to_string());
         }
@@ -1981,13 +2045,14 @@ impl GameState {
             .join(",");
 
         format!(
-            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"assetActions\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}],\"bankChat\":[{}]}}",
+            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"freeParkingPot\":{},\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"assetActions\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}],\"bankChat\":[{}]}}",
             escape_json(&self.room_code),
             self.phase.as_str(),
             escape_json(current),
             escape_json(&self.bank_message),
             self.dice[0],
             self.dice[1],
+            self.free_parking_pot,
             self.pending_offer_json(),
             self.auction_json(),
             self.drawn_card_json(),
@@ -2886,6 +2951,21 @@ mod tests {
         assert!(!game.players[0].jailed);
         assert_eq!(game.players[0].jail_turns, 0);
         assert_eq!(game.players[0].cash, cash_before - JAIL_FINE);
+        assert_eq!(game.free_parking_pot, JAIL_FINE);
+        assert!(game.bank_message.contains("Fri parkering-potten"));
+    }
+
+    #[test]
+    fn free_parking_pot_pays_out_and_resets() {
+        let mut game = playable_game();
+        game.free_parking_pot = 1200;
+        let cash_before = game.players[0].cash;
+
+        let payout = game.collect_free_parking_pot(0);
+
+        assert_eq!(payout, 1200);
+        assert_eq!(game.players[0].cash, cash_before + 1200);
+        assert_eq!(game.free_parking_pot, 0);
     }
 
     #[test]
@@ -2899,6 +2979,7 @@ mod tests {
         assert_eq!(loaded.owners[1], Some(0));
         assert_eq!(loaded.buildings[21], 2);
         assert_eq!(loaded.mortgaged[5], true);
+        assert_eq!(loaded.free_parking_pot, 1300);
         assert!(loaded.bank_message.contains("Demo-läge"));
     }
 }

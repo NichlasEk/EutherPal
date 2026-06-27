@@ -163,6 +163,63 @@ textarea {
   font-size: 1.55rem;
 }
 
+.free-parking-pot {
+  display: inline-grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 2px 8px;
+  margin-top: 8px;
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: rgba(40, 40, 40, 0.86);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+}
+
+.free-parking-pot strong,
+.free-parking-pot em {
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.free-parking-pot strong {
+  color: var(--green);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.free-parking-pot em {
+  grid-column: 2;
+  color: #fbf1c7;
+  font-size: 1rem;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.coin-stack {
+  grid-row: 1 / span 2;
+  position: relative;
+  display: block;
+  width: 26px;
+  height: 22px;
+}
+
+.coin-stack i {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 9px;
+  border: 2px solid #b57614;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #fabd2f, #d79921);
+  box-shadow: inset 0 1px 0 #fbf1c7, 0 2px 3px rgba(0, 0, 0, 0.35);
+}
+
+.coin-stack i:nth-child(1) { bottom: 0; }
+.coin-stack i:nth-child(2) { bottom: 6px; }
+.coin-stack i:nth-child(3) { bottom: 12px; }
+
 .tile {
   position: relative;
   display: block;
@@ -468,6 +525,12 @@ textarea {
   grid-column: 1 / -1;
   color: var(--muted);
   font-style: normal;
+}
+
+.player-row .player-name,
+.player-row .player-token,
+.player-row .player-cash {
+  min-width: 0;
 }
 
 .property-card {
@@ -1008,6 +1071,35 @@ body[data-view="tv"] .room-code strong {
   font-size: 1.16rem;
 }
 
+body[data-view="tv"] .free-parking-pot {
+  margin-top: 7px;
+  border-width: 2px;
+  padding: 5px 8px;
+  gap: 1px 6px;
+}
+
+body[data-view="tv"] .free-parking-pot strong {
+  font-size: 0.54rem;
+}
+
+body[data-view="tv"] .free-parking-pot em {
+  font-size: 0.82rem;
+}
+
+body[data-view="tv"] .coin-stack {
+  width: 21px;
+  height: 18px;
+}
+
+body[data-view="tv"] .coin-stack i {
+  height: 7px;
+  border-width: 1px;
+}
+
+body[data-view="tv"] .coin-stack i:nth-child(1) { bottom: 0; }
+body[data-view="tv"] .coin-stack i:nth-child(2) { bottom: 5px; }
+body[data-view="tv"] .coin-stack i:nth-child(3) { bottom: 10px; }
+
 body[data-view="tv"] .tile {
   padding: 0;
 }
@@ -1015,6 +1107,15 @@ body[data-view="tv"] .tile {
 body[data-view="tv"] .tile-copy {
   inset: 11px 3px 4px;
   gap: 1px;
+}
+
+body[data-view="tv"] .property::before {
+  height: 17px;
+}
+
+body[data-view="tv"] .property .tile-copy {
+  inset: 0;
+  display: block;
 }
 
 body[data-view="tv"] .corner .tile-copy,
@@ -1036,6 +1137,37 @@ body[data-view="tv"] .tile-name {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
 }
 
+body[data-view="tv"] .property .tile-name {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  left: 1px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 15px;
+  color: #fbf1c7;
+  font-size: 8.2px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  text-shadow:
+    -1px -1px 0 #1d2021,
+    1px -1px 0 #1d2021,
+    -1px 1px 0 #1d2021,
+    1px 1px 0 #1d2021,
+    0 2px 2px rgba(0, 0, 0, 0.7);
+}
+
+body[data-view="tv"] .property .tile-name-long {
+  font-size: 7.1px;
+}
+
+body[data-view="tv"] .property .tile-name-xlong {
+  font-size: 6.1px;
+}
+
 body[data-view="tv"] .tile-meta {
   color: #d5c4a1;
   font-size: clamp(5.8px, 0.86dvh, 7.4px);
@@ -1043,6 +1175,13 @@ body[data-view="tv"] .tile-meta {
   line-height: 1.04;
   overflow-wrap: anywhere;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+}
+
+body[data-view="tv"] .property .tile-meta {
+  position: absolute;
+  inset: 18px 2px 2px;
+  display: grid;
+  place-items: center;
 }
 
 body[data-view="tv"] .tokens {
@@ -1073,7 +1212,7 @@ body[data-view="tv"] .tokens-count-5 .token-mini {
 }
 
 body[data-view="tv"] .buildings {
-  top: 10px;
+  top: 18px;
   min-height: 9px;
   gap: 1px;
 }
@@ -1121,12 +1260,48 @@ body[data-view="tv"] .dice {
 }
 
 body[data-view="tv"] .player-list {
-  gap: 4px;
+  gap: 0;
 }
 
 body[data-view="tv"] .player-row {
-  gap: 2px 8px;
-  padding-bottom: 4px;
+  grid-template-columns: minmax(38px, 0.9fr) minmax(0, 1.2fr) auto;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 2px 0;
+}
+
+body[data-view="tv"] .player-row .player-name {
+  overflow: hidden;
+  font-size: 0.62rem;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body[data-view="tv"] .player-row .player-token {
+  grid-column: auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.58rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+body[data-view="tv"] .player-row .player-cash {
+  font-size: 0.58rem;
+  line-height: 1;
+  text-align: right;
+  white-space: nowrap;
+}
+
+body[data-view="tv"] .player-row .token-mini {
+  width: 17px;
+  height: 17px;
+  border-width: 1px;
 }
 
 body[data-view="tv"] .property-card {

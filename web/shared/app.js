@@ -91,6 +91,7 @@ function renderTv(state) {
     state.phase === "token_selection" ? "Pjäsval" : `Tärning: ${state.dice.join(" + ")}`;
   document.getElementById("bank-message").textContent = state.bankMessage;
   renderTvAuction(state);
+  renderFreeParkingPot(state.freeParkingPot || 0);
 
   const board = document.getElementById("board");
   board.innerHTML = "";
@@ -105,7 +106,7 @@ function renderTv(state) {
 
   const players = document.getElementById("players");
   players.innerHTML = state.players
-    .map((player) => `<div class="player-row"><strong>${escapeHtml(player.name)}</strong><span>${player.cash} kr</span><em>${tokenAvatar(player, "mini")} ${tokenLabel(player.token) || "Väljer pjäs"}${player.jailed ? " · Fängslad" : ""}</em></div>`)
+    .map((player) => `<div class="player-row"><strong class="player-name">${escapeHtml(player.name)}</strong><em class="player-token">${tokenAvatar(player, "mini")} ${tokenLabel(player.token) || "Väljer pjäs"}${player.jailed ? " · Fängslad" : ""}</em><span class="player-cash">${player.cash} kr</span></div>`)
     .join("");
 
   const tokenPanel = document.getElementById("token-status");
@@ -123,7 +124,14 @@ function renderTv(state) {
 
 function tileContent(space, players, position) {
   const meta = tvTileMeta(space);
-  return `<span class="tile-index">${position}</span><div class="tile-copy"><strong class="tile-name">${escapeHtml(space.name)}</strong>${meta ? `<small class="tile-meta">${escapeHtml(meta)}</small>` : ""}</div>${buildingMarkers(space)}${tileTokenLayer(players, position)}`;
+  return `<span class="tile-index">${position}</span><div class="tile-copy"><strong class="tile-name ${tileNameSizeClass(space.name)}">${escapeHtml(space.name)}</strong>${meta ? `<small class="tile-meta">${escapeHtml(meta)}</small>` : ""}</div>${buildingMarkers(space)}${tileTokenLayer(players, position)}`;
+}
+
+function tileNameSizeClass(name) {
+  const length = String(name || "").replace(/\s+/g, "").length;
+  if (length >= 15) return "tile-name-xlong";
+  if (length >= 11) return "tile-name-long";
+  return "";
 }
 
 function tvTileMeta(space) {
@@ -151,6 +159,12 @@ function renderTvAuction(state) {
   const auction = state.auction;
   panel.hidden = false;
   panel.innerHTML = `<strong>Auktion: ${escapeHtml(auction.spaceName)}</strong><span>Högsta bud ${auction.highestBid} kr${auction.highestBidder ? ` · ${escapeHtml(auction.highestBidder)}` : ""}</span><em>${auction.canFinish ? "Kan slutföras nu" : `${auction.secondsLeft}s kvar att bjuda`}</em>`;
+}
+
+function renderFreeParkingPot(amount) {
+  const pot = document.getElementById("free-parking-pot");
+  if (!pot) return;
+  pot.innerHTML = `<span class="coin-stack" aria-hidden="true"><i></i><i></i><i></i></span><strong>Fri parkering</strong><em>${amount} kr</em>`;
 }
 
 function playersForTvBoard(state) {
