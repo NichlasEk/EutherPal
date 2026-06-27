@@ -1095,9 +1095,9 @@ body[data-view="tv"] .board-wrap {
 }
 
 body[data-view="tv"] .board {
-  width: min(calc(114dvh - 18px), calc(100vw - clamp(226px, 17vw, 282px)));
+  width: min(calc(118dvh - 18px), calc(100vw - clamp(226px, 17vw, 282px)));
   min-width: 0;
-  aspect-ratio: 1.14 / 1;
+  aspect-ratio: 1.18 / 1;
   border-width: 3px;
 }
 
