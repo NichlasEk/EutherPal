@@ -113,7 +113,7 @@ function renderTv(state) {
 
   const players = document.getElementById("players");
   players.innerHTML = state.players
-    .map((player) => `<div class="player-row"><strong class="player-name">${escapeHtml(player.name)}</strong><em class="player-token">${tokenAvatar(player, "mini")} ${tokenLabel(player.token) || "Väljer pjäs"}${player.jailed ? " · Fängslad" : ""}</em><span class="player-cash">${player.cash} kr</span></div>`)
+    .map((player) => `<div class="player-row"><strong class="player-name">${escapeHtml(player.name)}${player.controller === "ai" ? " · AI" : ""}</strong><em class="player-token">${tokenAvatar(player, "mini")} ${tokenLabel(player.token) || "Väljer pjäs"}${player.jailed ? " · Fängslad" : ""}</em><span class="player-cash">${player.cash} kr</span></div>`)
     .join("");
 
   const tokenPanel = document.getElementById("token-status");
@@ -592,7 +592,7 @@ function renderAdminTools(state) {
   const playerSelect = document.getElementById("admin-adjust-player");
   if (!playerSelect) return;
   playerSelect.innerHTML = state.players
-    .map((player) => `<option value="${escapeHtml(player.name)}">${escapeHtml(player.name)}</option>`)
+    .map((player) => `<option value="${escapeHtml(player.name)}">${escapeHtml(player.name)}${player.controller === "ai" ? " · AI" : ""}</option>`)
     .join("");
 
   bindAdminToolButton("admin-save-game", "/api/game/save", status, "Sparat");
@@ -617,11 +617,18 @@ function renderAdminTools(state) {
 function bindAdminNewGameButton(status) {
   const button = document.getElementById("admin-new-game");
   const select = document.getElementById("admin-new-game-players");
+  const aiSelect = document.getElementById("admin-new-game-ai");
+  const aiNames = document.getElementById("admin-new-game-ai-names");
   if (!button || !select) return;
   button.onclick = async () => {
     const players = select.value || "4";
-    const updated = await postAction("/api/game/new", new URLSearchParams({ players }).toString());
-    if (status) status.textContent = `Nytt spel: ${players} spelare`;
+    const aiPlayers = String(Math.min(Number(aiSelect?.value || 0), Number(players || 4)));
+    const updated = await postAction("/api/game/new", new URLSearchParams({
+      players,
+      aiPlayers,
+      aiNames: aiNames?.value || "",
+    }).toString());
+    if (status) status.textContent = `Nytt spel: ${players} spelare, ${aiPlayers} AI`;
     renderAdmin(updated);
   };
 }
@@ -906,7 +913,7 @@ function renderPlayerSummary(state, localPlayer) {
     return;
   }
   const space = state.spaces[localPlayer.position];
-  summary.innerHTML = `${tokenAvatar(localPlayer, "large")}<div><strong>${escapeHtml(localPlayer.name)}</strong><span>${tokenLabel(localPlayer.token) || "Ingen pjäs"} · ${space?.name || "Okänd ruta"} · ${localPlayer.cash} kr${localPlayer.jailed ? " · Fängslad" : ""}${localPlayer.bankrupt ? " · Konkurs" : ""}</span></div>`;
+  summary.innerHTML = `${tokenAvatar(localPlayer, "large")}<div><strong>${escapeHtml(localPlayer.name)}${localPlayer.controller === "ai" ? " · AI" : ""}</strong><span>${tokenLabel(localPlayer.token) || "Ingen pjäs"} · ${space?.name || "Okänd ruta"} · ${localPlayer.cash} kr${localPlayer.jailed ? " · Fängslad" : ""}${localPlayer.bankrupt ? " · Konkurs" : ""}</span></div>`;
 }
 
 function buildingMarkers(space) {

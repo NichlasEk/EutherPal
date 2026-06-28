@@ -43,12 +43,19 @@ const TOKEN_CHOICES: &[(&str, &str)] = &[
 #[derive(Clone)]
 struct Player {
     name: String,
+    controller: PlayerController,
     cash: i32,
     position: usize,
     token: Option<String>,
     jailed: bool,
     jail_turns: u8,
     bankrupt: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum PlayerController {
+    Human,
+    Ai,
 }
 
 #[derive(Clone)]
@@ -160,6 +167,7 @@ struct GameState {
     drawn_card: Option<DrawnCard>,
     bank_proposals: Vec<BankProposal>,
     next_bank_proposal_id: u64,
+    ai_action_pending: bool,
     bank_chat: Vec<BankChatMessage>,
     events: Vec<String>,
     free_parking_pot: i32,
@@ -230,8 +238,15 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
             json(200, &health_json(&game))
         }
         ("GET", "/api/game") | ("GET", "/api/game/mock") => {
-            let game = game.lock().expect("game state lock");
-            json(200, &game.to_json())
+            let (body, should_spawn_ai) = {
+                let mut game = game.lock().expect("game state lock");
+                let should_spawn_ai = game.queue_ai_action_if_needed();
+                (game.to_json(), should_spawn_ai)
+            };
+            if should_spawn_ai {
+                spawn_ai_action(Arc::clone(&game));
+            }
+            json(200, &body)
         }
         ("GET", "/api/settings") => json(200, &load_settings().to_json()),
         ("POST", "/api/settings") => {
@@ -251,8 +266,15 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .or_else(|| query_value(query, "players"))
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(DEFAULT_PLAYER_COUNT);
+            let ai_count = form_value(&body, "aiPlayers")
+                .or_else(|| query_value(query, "aiPlayers"))
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            let ai_names = form_value(&body, "aiNames")
+                .or_else(|| query_value(query, "aiNames"))
+                .unwrap_or_default();
             let mut game = game.lock().expect("game state lock");
-            *game = GameState::new_with_player_count(player_count);
+            *game = GameState::new_with_ai_players(player_count, ai_count, &ai_names);
             json(200, &game.to_json())
         }
         ("POST", "/api/game/save") => {
@@ -507,6 +529,15 @@ fn spawn_bank_answer(game: SharedGame, job: BankAsyncJob) {
     });
 }
 
+fn spawn_ai_action(game: SharedGame) {
+    thread::spawn(move || {
+        thread::sleep(std::time::Duration::from_millis(650));
+        let mut game = game.lock().expect("game state lock");
+        game.run_ai_action();
+        game.ai_action_pending = false;
+    });
+}
+
 struct Settings {
     model: String,
     preprompt: String,
@@ -598,6 +629,13 @@ impl GameState {
         Self::new_with_player_count(DEFAULT_PLAYER_COUNT)
     }
 
+    fn new_with_ai_players(player_count: usize, ai_count: usize, ai_names: &str) -> Self {
+        let mut game = Self::new_with_player_count(player_count);
+        game.configure_ai_players(ai_count, ai_names);
+        game.refresh_selection_message();
+        game
+    }
+
     fn new_with_player_count(player_count: usize) -> Self {
         let spaces = parse_board_spaces(BOARD_TOML);
         let (chance_cards, community_cards) = parse_game_cards(CARDS_TOML);
@@ -638,6 +676,7 @@ impl GameState {
             drawn_card: None,
             bank_proposals: Vec::new(),
             next_bank_proposal_id: 1,
+            ai_action_pending: false,
             bank_chat: vec![BankChatMessage {
                 speaker: "Banken".to_string(),
                 text: "Jag är redo som bank och spelledare. Skriv i mobilen om du vill fråga om regler, köp, hyra eller din position.".to_string(),
@@ -650,6 +689,52 @@ impl GameState {
             ),
             bank_ai_status: llm_config_label(),
         }
+    }
+
+    fn configure_ai_players(&mut self, ai_count: usize, ai_names: &str) {
+        let ai_count = ai_count.min(self.players.len());
+        let human_count = self.players.len().saturating_sub(ai_count);
+        let names = parse_ai_names(ai_names);
+        for (index, player) in self.players.iter_mut().enumerate() {
+            player.controller = if index >= human_count {
+                PlayerController::Ai
+            } else {
+                PlayerController::Human
+            };
+            if player.controller == PlayerController::Ai {
+                let ai_number = index - human_count;
+                player.name = names
+                    .get(ai_number)
+                    .cloned()
+                    .unwrap_or_else(|| default_ai_name(ai_number));
+            }
+        }
+    }
+
+    fn refresh_selection_message(&mut self) {
+        if self.phase != Phase::TokenSelection || self.selection_order.is_empty() {
+            return;
+        }
+        let first = self.selection_order[self.selection_cursor];
+        let first_name = self.players[first].name.clone();
+        let ai_count = self
+            .players
+            .iter()
+            .filter(|player| player.controller == PlayerController::Ai)
+            .count();
+        let human_count = self.players.len().saturating_sub(ai_count);
+        let controller_text = if ai_count > 0 {
+            let human_label = if human_count == 1 {
+                "människa"
+            } else {
+                "människor"
+            };
+            format!(" {human_count} {human_label} och {ai_count} AI-spelare är med.")
+        } else {
+            String::new()
+        };
+        self.events = vec![format!("{first_name} börjar och väljer pjäs först.")];
+        self.bank_message = format!("{first_name} börjar och väljer pjäs först.{controller_text}");
     }
 
     fn demo() -> Self {
@@ -806,14 +891,15 @@ impl GameState {
         }
         for player in &self.players {
             lines.push(format!(
-                "player\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "player\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 snapshot_escape(&player.name),
                 player.cash,
                 player.position,
                 snapshot_escape(player.token.as_deref().unwrap_or("")),
                 player.jailed,
                 player.jail_turns,
-                player.bankrupt
+                player.bankrupt,
+                player.controller.as_str()
             ));
         }
         for index in 0..self.spaces.len() {
@@ -933,6 +1019,10 @@ impl GameState {
                     game.players[player_index].jailed = parse_bool(parts[5]);
                     game.players[player_index].jail_turns = parts[6].parse().ok()?;
                     game.players[player_index].bankrupt = parse_bool(parts[7]);
+                    game.players[player_index].controller = parts
+                        .get(8)
+                        .map(|value| PlayerController::from_str(value))
+                        .unwrap_or(PlayerController::Human);
                     player_index += 1;
                 }
                 "asset" if parts.len() >= 5 => {
@@ -1971,6 +2061,162 @@ impl GameState {
         }
     }
 
+    fn queue_ai_action_if_needed(&mut self) -> bool {
+        if self.ai_action_pending {
+            return false;
+        }
+        let should_queue = match self.phase {
+            Phase::TokenSelection => self
+                .selection_order
+                .get(self.selection_cursor)
+                .and_then(|index| self.players.get(*index))
+                .map(|player| player.controller == PlayerController::Ai && player.token.is_none())
+                .unwrap_or(false),
+            Phase::Play => {
+                self.players
+                    .get(self.current_player_index)
+                    .map(|player| player.controller == PlayerController::Ai && !player.bankrupt)
+                    .unwrap_or(false)
+                    && self.auction.is_none()
+            }
+            Phase::Auction => self
+                .auction
+                .as_ref()
+                .map(auction_seconds_left)
+                .map(|seconds| seconds == 0)
+                .unwrap_or(false),
+        };
+        if should_queue {
+            self.ai_action_pending = true;
+            let name = match self.phase {
+                Phase::TokenSelection => self
+                    .selection_order
+                    .get(self.selection_cursor)
+                    .and_then(|index| self.players.get(*index))
+                    .map(|player| player.name.clone())
+                    .unwrap_or_else(|| "AI".to_string()),
+                _ => self
+                    .players
+                    .get(self.current_player_index)
+                    .map(|player| player.name.clone())
+                    .unwrap_or_else(|| "AI".to_string()),
+            };
+            self.bank_message = format!("{name} tänker...");
+        }
+        should_queue
+    }
+
+    fn run_ai_action(&mut self) {
+        match self.phase {
+            Phase::TokenSelection => self.select_ai_token(),
+            Phase::Play => self.run_ai_play_action(),
+            Phase::Auction => self.finish_auction(),
+        }
+    }
+
+    fn select_ai_token(&mut self) {
+        if self.phase != Phase::TokenSelection {
+            return;
+        }
+        let Some(player_index) = self.selection_order.get(self.selection_cursor).copied() else {
+            return;
+        };
+        if self.players[player_index].controller != PlayerController::Ai {
+            return;
+        }
+        let Some(token) = self.first_available_token() else {
+            self.bank_message = "AI kunde inte hitta en ledig pjäs.".to_string();
+            return;
+        };
+        let name = self.players[player_index].name.clone();
+        self.select_token(&token, &name);
+    }
+
+    fn run_ai_play_action(&mut self) {
+        if self.phase != Phase::Play {
+            return;
+        }
+        let player_index = self.current_player_index;
+        if self.players[player_index].controller != PlayerController::Ai
+            || self.players[player_index].bankrupt
+        {
+            return;
+        }
+        let player_name = self.players[player_index].name.clone();
+
+        if let Some(offer) = &self.pending_offer {
+            if offer.player_index == player_index {
+                let price = self.spaces[offer.space_index].price.unwrap_or(0);
+                if self.players[player_index].cash >= price {
+                    self.buy_pending_property(&player_name);
+                } else {
+                    self.decline_pending_property(&player_name);
+                }
+            }
+            return;
+        }
+
+        if self.players[player_index].cash < 0 {
+            if self.ai_liquidate_once(player_index) {
+                return;
+            }
+            self.declare_bankruptcy(player_index);
+            return;
+        }
+
+        if self.players[player_index].jailed
+            && self.players[player_index].cash >= JAIL_FINE + 1000
+            && self.players[player_index].jail_turns >= 1
+        {
+            self.pay_jail_fine(&player_name);
+            return;
+        }
+
+        self.roll_current_player(&player_name);
+    }
+
+    fn ai_liquidate_once(&mut self, player_index: usize) -> bool {
+        if let Some(space_index) = self
+            .spaces
+            .iter()
+            .find(|space| {
+                self.owners[space.index] == Some(player_index) && self.buildings[space.index] > 0
+            })
+            .map(|space| space.index)
+        {
+            let name = self.players[player_index].name.clone();
+            self.sell_building(space_index, &name);
+            return true;
+        }
+        if let Some(space_index) = self
+            .spaces
+            .iter()
+            .find(|space| {
+                self.owners[space.index] == Some(player_index)
+                    && !self.mortgaged[space.index]
+                    && !self.has_buildings_in_group(space.index)
+            })
+            .map(|space| space.index)
+        {
+            let name = self.players[player_index].name.clone();
+            self.mortgage_property(space_index, &name);
+            return true;
+        }
+        false
+    }
+
+    fn first_available_token(&self) -> Option<String> {
+        TOKEN_CHOICES
+            .iter()
+            .find(|(id, _)| {
+                !self
+                    .players
+                    .iter()
+                    .any(|player| player.token.as_deref() == Some(*id))
+            })
+            .map(|(id, _)| (*id).to_string())
+    }
+
     fn accept_bank_proposal(&mut self, player_name: &str, proposal_id: u64) {
         let Some(player_index) = self.player_index_by_name(player_name) else {
             self.bank_message = "Banken hittar inte spelaren för det här förslaget.".to_string();
@@ -2712,8 +2958,9 @@ impl GameState {
             .iter()
             .map(|player| {
                 format!(
-                    "{{\"name\":\"{}\",\"cash\":{},\"position\":{},\"token\":{},\"jailed\":{},\"jailTurns\":{},\"bankrupt\":{}}}",
+                    "{{\"name\":\"{}\",\"controller\":\"{}\",\"cash\":{},\"position\":{},\"token\":{},\"jailed\":{},\"jailTurns\":{},\"bankrupt\":{}}}",
                     escape_json(&player.name),
+                    player.controller.as_str(),
                     player.cash,
                     player.position,
                     optional_json_string(player.token.as_deref()),
@@ -3023,12 +3270,30 @@ impl Player {
     fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
+            controller: PlayerController::Human,
             cash: 15000,
             position: 0,
             token: None,
             jailed: false,
             jail_turns: 0,
             bankrupt: false,
+        }
+    }
+}
+
+impl PlayerController {
+    fn as_str(self) -> &'static str {
+        match self {
+            PlayerController::Human => "human",
+            PlayerController::Ai => "ai",
+        }
+    }
+
+    fn from_str(value: &str) -> Self {
+        if value == "ai" {
+            PlayerController::Ai
+        } else {
+            PlayerController::Human
         }
     }
 }
@@ -3554,6 +3819,22 @@ fn clean_chat_message(message: &str) -> String {
         .collect()
 }
 
+fn parse_ai_names(names: &str) -> Vec<String> {
+    names
+        .split(',')
+        .map(clean_player_name)
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+fn default_ai_name(index: usize) -> String {
+    ["Rut", "Bosse", "Sigrid", "Loke", "Eira"]
+        .get(index)
+        .copied()
+        .unwrap_or("AI")
+        .to_string()
+}
+
 fn normalize_lookup(value: &str) -> String {
     value
         .to_lowercase()
@@ -3792,6 +4073,52 @@ mod tests {
         assert!(second.is_none());
         assert_eq!(game.players[0].cash, cash_before + 1000);
         assert!(game.bank_message.contains("nödlån på 1000 kr"));
+    }
+
+    #[test]
+    fn new_game_can_configure_ai_players() {
+        let game = GameState::new_with_ai_players(4, 2, "Rut, Bosse");
+
+        assert!(game.players[0].controller == PlayerController::Human);
+        assert!(game.players[1].controller == PlayerController::Human);
+        assert!(game.players[2].controller == PlayerController::Ai);
+        assert!(game.players[3].controller == PlayerController::Ai);
+        assert_eq!(game.players[2].name, "Rut");
+        assert_eq!(game.players[3].name, "Bosse");
+        assert!(game.bank_message.contains("2 AI-spelare"));
+    }
+
+    #[test]
+    fn ai_player_auto_selects_token_when_queued() {
+        let mut game = GameState::new_with_ai_players(3, 1, "Rut");
+        game.selection_order = vec![2, 0, 1];
+        game.selection_cursor = 0;
+
+        assert!(game.queue_ai_action_if_needed());
+        game.run_ai_action();
+        game.ai_action_pending = false;
+
+        assert!(game.players[2].token.is_some());
+        assert_eq!(game.selection_cursor, 1);
+        assert!(game.players[2].controller == PlayerController::Ai);
+    }
+
+    #[test]
+    fn ai_player_buys_pending_property_when_affordable() {
+        let mut game = playable_game();
+        game.players[0].name = "Rut".to_string();
+        game.players[0].controller = PlayerController::Ai;
+        game.pending_offer = Some(PendingOffer {
+            player_index: 0,
+            space_index: 1,
+        });
+        let cash_before = game.players[0].cash;
+        let price = game.spaces[1].price.unwrap_or(0);
+
+        game.run_ai_action();
+
+        assert_eq!(game.owners[1], Some(0));
+        assert_eq!(game.players[0].cash, cash_before - price);
     }
 
     #[test]
