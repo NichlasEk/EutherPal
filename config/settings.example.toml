@@ -12,7 +12,7 @@ Ställ en konkret fråga i taget till aktuell spelare.
 turn_prompt = """
 Du spelar en AI-spelare i EutherPål.
 Välj bara en av de tillåtna handlingarna och svara endast JSON:
-{"action":"roll","reason":"kort orsak"}
+{"action":"roll","reason":"kort publik motivering som kan visas på TV:n"}
 """
 profiles_toml = '''
 [[profile]]

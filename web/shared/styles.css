@@ -45,6 +45,12 @@ button {
   font-weight: 800;
 }
 
+button.danger-button {
+  border-color: #cc241d;
+  background: #9d0006;
+  color: #fbf1c7;
+}
+
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
@@ -142,6 +148,34 @@ textarea {
 
 .board-center p {
   max-width: 36ch;
+}
+
+.ai-turn-thought {
+  display: grid;
+  gap: 3px;
+  width: min(100%, 34ch);
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 2px solid var(--blue);
+  border-radius: 6px;
+  background: rgba(40, 40, 40, 0.86);
+  color: var(--ink);
+  box-shadow: 0 0 20px rgba(131, 165, 152, 0.2);
+}
+
+.ai-turn-thought[hidden] {
+  display: none;
+}
+
+.ai-turn-thought strong {
+  color: var(--yellow);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.ai-turn-thought span {
+  font-size: 0.85rem;
+  line-height: 1.2;
 }
 
 .room-code {
@@ -1114,6 +1148,17 @@ body[data-view="tv"] .board-center h1 {
 body[data-view="tv"] .board-center p {
   font-size: 0.78rem;
   line-height: 1.18;
+}
+
+body[data-view="tv"] .ai-turn-thought {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-width: 2px;
+}
+
+body[data-view="tv"] .ai-turn-thought span {
+  font-size: 0.72rem;
+  line-height: 1.12;
 }
 
 body[data-view="tv"] .room-code {

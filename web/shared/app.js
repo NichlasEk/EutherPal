@@ -97,6 +97,7 @@ function renderTv(state) {
   document.getElementById("dice").textContent =
     state.phase === "token_selection" ? "Pjäsval" : `Tärning: ${state.dice.join(" + ")}`;
   document.getElementById("bank-message").textContent = state.bankMessage;
+  renderAiTurnThought(state);
   renderTvAuction(state);
   renderFreeParkingPot(state.freeParkingPot || 0);
 
@@ -127,6 +128,19 @@ function renderTv(state) {
 
   renderPropertyCard(document.getElementById("tv-card"), selectedSpace(state));
   renderEvents(document.getElementById("tv-events"), state.events);
+}
+
+function renderAiTurnThought(state) {
+  const panel = document.getElementById("ai-turn-thought");
+  if (!panel) return;
+  const source = state.stopped ? "Stoppad" : state.aiTurnSource;
+  const thought = state.stopped
+    ? "Spelet är stoppat av admin."
+    : (state.aiTurnThought || "");
+  panel.hidden = !thought;
+  panel.innerHTML = thought
+    ? `<strong>${escapeHtml(source || "AI")}</strong><span>${escapeHtml(thought)}</span>`
+    : "";
 }
 
 function tileContent(space, players, position) {
@@ -233,7 +247,9 @@ function renderMobile(state) {
   const localPlayerName = localPlayer();
   const local = state.players.find((player) => player.name === localPlayerName);
   document.getElementById("mobile-status").textContent =
-    state.phase === "token_selection"
+    state.stopped
+      ? "Spelet är stoppat av admin."
+      : state.phase === "token_selection"
       ? `${state.currentPlayer} väljer pjäs.`
       : state.phase === "auction"
         ? `Auktion pågår.`
@@ -427,7 +443,7 @@ function renderBankProposalControls(state, localPlayer) {
   }
 
   panel.innerHTML = `<h3>Bankförslag</h3>${proposals
-    .map((proposal) => `<div class="bank-proposal" data-proposal="${proposal.id}"><strong>${escapeHtml(proposal.summary)}</strong><p>${escapeHtml(proposal.note || "Väntar på ditt svar.")}</p>${proposalSpaces(proposal)}<div class="proposal-actions"><button type="button" data-proposal-action="accept" data-proposal-id="${proposal.id}" ${actionInFlight ? "disabled" : ""}>Acceptera</button><button type="button" data-proposal-action="decline" data-proposal-id="${proposal.id}" ${actionInFlight ? "disabled" : ""}>Avböj</button><input type="number" min="1" step="100" placeholder="Motbud kr" data-counter-amount><button type="button" data-proposal-action="counter" data-proposal-id="${proposal.id}" ${actionInFlight ? "disabled" : ""}>Motbud</button></div></div>`)
+    .map((proposal) => `<div class="bank-proposal" data-proposal="${proposal.id}"><strong>${escapeHtml(proposal.summary)}</strong><p>${escapeHtml(proposal.note || "Väntar på ditt svar.")}</p>${proposalSpaces(proposal)}<div class="proposal-actions"><button type="button" data-proposal-action="accept" data-proposal-id="${proposal.id}" ${state.stopped || actionInFlight ? "disabled" : ""}>Acceptera</button><button type="button" data-proposal-action="decline" data-proposal-id="${proposal.id}" ${state.stopped || actionInFlight ? "disabled" : ""}>Avböj</button><input type="number" min="1" step="100" placeholder="Motbud kr" data-counter-amount ${state.stopped ? "disabled" : ""}><button type="button" data-proposal-action="counter" data-proposal-id="${proposal.id}" ${state.stopped || actionInFlight ? "disabled" : ""}>Motbud</button></div></div>`)
     .join("")}`;
 
   panel.querySelectorAll("button[data-proposal-action]").forEach((button) => {
@@ -605,6 +621,7 @@ function renderAdminTools(state) {
   bindAdminToolButton("admin-save-game", "/api/game/save", status, "Sparat");
   bindAdminToolButton("admin-load-game", "/api/game/load", status, "Laddat");
   bindAdminToolButton("admin-demo-game", "/api/game/demo", status, "Demo laddad");
+  bindAdminStopButton(status, state);
   bindAdminNewGameButton(status);
 
   const form = document.getElementById("admin-adjust-form");
@@ -617,6 +634,18 @@ function renderAdminTools(state) {
     });
     const updated = await postAction("/api/game/admin-adjust", body.toString());
     if (status) status.textContent = "Justerat";
+    renderAdmin(updated);
+  };
+}
+
+function bindAdminStopButton(status, state) {
+  const button = document.getElementById("admin-stop-game");
+  if (!button) return;
+  button.disabled = Boolean(state?.stopped);
+  button.onclick = async () => {
+    if (!window.confirm("Stoppa pågående spel? AI och spelhandlingar avbryts tills du startar ett nytt spel.")) return;
+    const updated = await postAction("/api/game/stop", "");
+    if (status) status.textContent = "Spelet stoppat";
     renderAdmin(updated);
   };
 }
@@ -687,15 +716,16 @@ function renderOfferControls(state, localPlayer) {
   const offerForLocal = Boolean(offer && localPlayer?.name === offer.player);
   const localDebt = Number(localPlayer?.cash || 0) < 0;
 
-  buyButton.disabled = !offerForLocal;
-  declineButton.disabled = !offerForLocal;
-  rollButton.disabled = !isLocalTurn || localDebt || Boolean(offer) || Boolean(state.auction) || state.phase === "token_selection";
+  buyButton.disabled = state.stopped || !offerForLocal;
+  declineButton.disabled = state.stopped || !offerForLocal;
+  rollButton.disabled = state.stopped || !isLocalTurn || localDebt || Boolean(offer) || Boolean(state.auction) || state.phase === "token_selection";
   if (actionInFlight) {
     buyButton.disabled = true;
     declineButton.disabled = true;
     rollButton.disabled = true;
   }
-  if (localDebt) rollButton.textContent = "Lös skuld först";
+  if (state.stopped) rollButton.textContent = "Spelet stoppat";
+  else if (localDebt) rollButton.textContent = "Lös skuld först";
   else if (localPlayer?.jailed) rollButton.textContent = "Slå för dubbel";
   else rollButton.textContent = "Kasta tärning";
 
@@ -719,11 +749,11 @@ function renderAuctionControls(state, localPlayer) {
   const bid100 = auction.nextBid;
   const bid500 = auction.highestBid + 500;
   const bidderButtons = localPlayer
-    ? `<div class="auction-row"><strong>${escapeHtml(localPlayer.name)}</strong><button type="button" data-bidder="${escapeHtml(localPlayer.name)}" data-amount="${bid100}" ${actionInFlight || localPlayer.cash < bid100 ? "disabled" : ""}>${bid100} kr</button><button type="button" data-bidder="${escapeHtml(localPlayer.name)}" data-amount="${bid500}" ${actionInFlight || localPlayer.cash < bid500 ? "disabled" : ""}>${bid500} kr</button></div>`
+      ? `<div class="auction-row"><strong>${escapeHtml(localPlayer.name)}</strong><button type="button" data-bidder="${escapeHtml(localPlayer.name)}" data-amount="${bid100}" ${state.stopped || actionInFlight || localPlayer.cash < bid100 ? "disabled" : ""}>${bid100} kr</button><button type="button" data-bidder="${escapeHtml(localPlayer.name)}" data-amount="${bid500}" ${state.stopped || actionInFlight || localPlayer.cash < bid500 ? "disabled" : ""}>${bid500} kr</button></div>`
     : `<p>Skriv ditt namn och välj pjäs för att lägga bud.</p>`;
   const finishText = auction.canFinish ? "Slutför auktion" : `Vänta ${auction.secondsLeft}s`;
 
-  panel.innerHTML = `<h3>Auktion: ${auction.spaceName}</h3><p>Högsta bud: ${auction.highestBid} kr${auction.highestBidder ? `, ${auction.highestBidder}` : ""}. ${auction.canFinish ? "Auktionen kan slutföras." : `${auction.secondsLeft}s kvar att bjuda.`}</p>${bidderButtons}<button id="finish-auction-button" type="button" ${actionInFlight || !auction.canFinish ? "disabled" : ""}>${finishText}</button>`;
+  panel.innerHTML = `<h3>Auktion: ${auction.spaceName}</h3><p>Högsta bud: ${auction.highestBid} kr${auction.highestBidder ? `, ${auction.highestBidder}` : ""}. ${auction.canFinish ? "Auktionen kan slutföras." : `${auction.secondsLeft}s kvar att bjuda.`}</p>${bidderButtons}<button id="finish-auction-button" type="button" ${state.stopped || actionInFlight || !auction.canFinish ? "disabled" : ""}>${finishText}</button>`;
 
   panel.querySelectorAll("button[data-bidder]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -747,7 +777,7 @@ function renderJailControls(state, localPlayer) {
     panel.innerHTML = "";
     return;
   }
-  panel.innerHTML = `<h3>Fängelse</h3><p>Försök ${localPlayer.jailTurns || 0}/3. Slå dubbel eller betala 500 kr.</p><button id="pay-jail-button" type="button" ${isLocalTurn && localPlayer.cash >= 500 ? "" : "disabled"}>Betala 500 kr</button>`;
+  panel.innerHTML = `<h3>Fängelse</h3><p>Försök ${localPlayer.jailTurns || 0}/3. Slå dubbel eller betala 500 kr.</p><button id="pay-jail-button" type="button" ${!state.stopped && isLocalTurn && localPlayer.cash >= 500 ? "" : "disabled"}>Betala 500 kr</button>`;
   const button = document.getElementById("pay-jail-button");
   if (button) {
     button.disabled = button.disabled || actionInFlight;
@@ -763,7 +793,7 @@ function renderBuildControls(state, localPlayer) {
 
   const isLocalTurn = localPlayer?.name === state.currentPlayer;
   const options = state.buildableProperties || [];
-  buildButton.disabled = !isLocalTurn || options.length === 0 || !options.some((option) => option.canBuild);
+  buildButton.disabled = state.stopped || !isLocalTurn || options.length === 0 || !options.some((option) => option.canBuild);
   if (actionInFlight) buildButton.disabled = true;
 
   if (options.length === 0) {
@@ -774,7 +804,7 @@ function renderBuildControls(state, localPlayer) {
   }
 
   panel.innerHTML = `<h3>Byggnader</h3>${options
-    .map((option) => `<button type="button" data-build="${option.spaceIndex}" ${isLocalTurn && option.canBuild ? "" : "disabled"}><strong>${option.spaceName}</strong><span>${option.label} → ${option.nextLabel}</span><em>${option.buildCost} kr · ny hyra ${option.rentAfter} kr</em></button>`)
+    .map((option) => `<button type="button" data-build="${option.spaceIndex}" ${!state.stopped && isLocalTurn && option.canBuild ? "" : "disabled"}><strong>${option.spaceName}</strong><span>${option.label} → ${option.nextLabel}</span><em>${option.buildCost} kr · ny hyra ${option.rentAfter} kr</em></button>`)
     .join("")}`;
 
     panel.querySelectorAll("button[data-build]").forEach((button) => {
@@ -786,8 +816,8 @@ function renderBuildControls(state, localPlayer) {
   });
 
   const first = options.find((option) => option.canBuild);
-  buildButton.textContent = first && isLocalTurn ? `Bygg ${first.spaceName}` : "Bygg";
-  buildButton.onclick = first && isLocalTurn
+  buildButton.textContent = first && isLocalTurn && !state.stopped ? `Bygg ${first.spaceName}` : "Bygg";
+  buildButton.onclick = first && isLocalTurn && !state.stopped
     ? (event) => {
         const body = new URLSearchParams({ player: localPlayerName(), spaceIndex: first.spaceIndex });
         runMobileAction(event.currentTarget, "Bygger...", "/api/game/build", body.toString());
@@ -800,7 +830,7 @@ function renderAssetControls(state, localPlayer) {
   const summary = document.getElementById("asset-summary");
   if (!panel) return;
   const isLocalTurn = localPlayer?.name === state.currentPlayer;
-  const canUseAssetActions = isLocalTurn || Number(localPlayer?.cash || 0) < 0;
+  const canUseAssetActions = !state.stopped && (isLocalTurn || Number(localPlayer?.cash || 0) < 0);
   const actionMap = new Map((state.assetActions || []).map((action) => [Number(action.spaceIndex), action]));
   const owned = localPlayer
     ? state.spaces
@@ -853,7 +883,7 @@ function renderTokenButtons(state) {
   const panel = document.getElementById("token-buttons");
   const name = localPlayerName();
   const alreadyPicked = state.players.some((player) => player.name === name && player.token);
-  const canPickToken = state.phase === "token_selection" && state.currentPlayer && name.length > 0 && !alreadyPicked;
+  const canPickToken = !state.stopped && state.phase === "token_selection" && state.currentPlayer && name.length > 0 && !alreadyPicked;
   panel.innerHTML = state.tokenChoices
     .map((token) => `<button type="button" data-token="${token.id}" ${token.available && canPickToken ? "" : "disabled"}>${tokenAvatar({ name, token: token.id }, "choice")}<span>${token.label}</span></button>`)
     .join("");

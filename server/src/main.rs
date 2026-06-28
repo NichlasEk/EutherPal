@@ -126,6 +126,11 @@ struct AiTurnJob {
     fallback_decision: AiDecision,
 }
 
+struct AiTurnAnswer {
+    decision: AiDecision,
+    reason: String,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum AiDecision {
     Buy,
@@ -134,6 +139,10 @@ enum AiDecision {
     PayJail,
     Liquidate,
     Bankrupt,
+    Build,
+    Trade,
+    AcceptProposal,
+    DeclineProposal,
     Wait,
 }
 
@@ -193,6 +202,9 @@ struct GameState {
     free_parking_pot: i32,
     bank_message: String,
     bank_ai_status: String,
+    ai_turn_source: String,
+    ai_turn_thought: String,
+    stopped: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -335,6 +347,11 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
             *game = GameState::demo();
             json(200, &game.to_json())
         }
+        ("POST", "/api/game/stop") => {
+            let mut game = game.lock().expect("game state lock");
+            game.stop_game();
+            json(200, &game.to_json())
+        }
         ("POST", "/api/game/admin-adjust") => {
             let player = form_value(&body, "player")
                 .or_else(|| query_value(query, "player"))
@@ -358,7 +375,9 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .or_else(|| query_value(query, "player"))
                 .unwrap_or_default();
             let mut game = game.lock().expect("game state lock");
-            game.select_token(&token, &player_name);
+            if !game.reject_stopped_action() {
+                game.select_token(&token, &player_name);
+            }
             json(200, &game.to_json())
         }
         ("POST", "/api/game/roll") => {
@@ -366,7 +385,9 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .or_else(|| query_value(query, "player"))
                 .unwrap_or_default();
             let mut game = game.lock().expect("game state lock");
-            game.roll_current_player(&player);
+            if !game.reject_stopped_action() {
+                game.roll_current_player(&player);
+            }
             json(200, &game.to_json())
         }
         ("POST", "/api/game/buy") => {
@@ -374,7 +395,9 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .or_else(|| query_value(query, "player"))
                 .unwrap_or_default();
             let mut game = game.lock().expect("game state lock");
-            game.buy_pending_property(&player);
+            if !game.reject_stopped_action() {
+                game.buy_pending_property(&player);
+            }
             json(200, &game.to_json())
         }
         ("POST", "/api/game/decline") => {
@@ -382,7 +405,9 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .or_else(|| query_value(query, "player"))
                 .unwrap_or_default();
             let mut game = game.lock().expect("game state lock");
-            game.decline_pending_property(&player);
+            if !game.reject_stopped_action() {
+                game.decline_pending_property(&player);
+            }
             json(200, &game.to_json())
         }
         ("POST", "/api/game/build") => {
@@ -394,7 +419,9 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(usize::MAX);
             let mut game = game.lock().expect("game state lock");
-            game.build_property(space_index, &player);
+            if !game.reject_stopped_action() {
+                game.build_property(space_index, &player);
+            }
             json(200, &game.to_json())
         }
         ("POST", "/api/game/sell-building") => {
@@ -406,7 +433,9 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(usize::MAX);
             let mut game = game.lock().expect("game state lock");
-            game.sell_building(space_index, &player);
+            if !game.reject_stopped_action() {
+                game.sell_building(space_index, &player);
+            }
             json(200, &game.to_json())
         }
         ("POST", "/api/game/mortgage") => {
@@ -418,7 +447,9 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(usize::MAX);
             let mut game = game.lock().expect("game state lock");
-            game.mortgage_property(space_index, &player);
+            if !game.reject_stopped_action() {
+                game.mortgage_property(space_index, &player);
+            }
             json(200, &game.to_json())
         }
         ("POST", "/api/game/unmortgage") => {
@@ -430,7 +461,9 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(usize::MAX);
             let mut game = game.lock().expect("game state lock");
-            game.unmortgage_property(space_index, &player);
+            if !game.reject_stopped_action() {
+                game.unmortgage_property(space_index, &player);
+            }
             json(200, &game.to_json())
         }
         ("POST", "/api/game/pay-jail") => {
@@ -438,7 +471,9 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .or_else(|| query_value(query, "player"))
                 .unwrap_or_default();
             let mut game = game.lock().expect("game state lock");
-            game.pay_jail_fine(&player);
+            if !game.reject_stopped_action() {
+                game.pay_jail_fine(&player);
+            }
             json(200, &game.to_json())
         }
         ("POST", "/api/game/auction/bid") => {
@@ -450,12 +485,16 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .and_then(|value| value.parse::<i32>().ok())
                 .unwrap_or(0);
             let mut game = game.lock().expect("game state lock");
-            game.place_auction_bid(&player, amount);
+            if !game.reject_stopped_action() {
+                game.place_auction_bid(&player, amount);
+            }
             json(200, &game.to_json())
         }
         ("POST", "/api/game/auction/finish") => {
             let mut game = game.lock().expect("game state lock");
-            game.finish_auction();
+            if !game.reject_stopped_action() {
+                game.finish_auction();
+            }
             json(200, &game.to_json())
         }
         ("POST", "/api/bank/chat") => {
@@ -484,7 +523,9 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(0);
             let mut game = game.lock().expect("game state lock");
-            game.accept_bank_proposal(&player, proposal_id);
+            if !game.reject_stopped_action() {
+                game.accept_bank_proposal(&player, proposal_id);
+            }
             json(200, &game.to_json())
         }
         ("POST", "/api/bank/proposal/decline") => {
@@ -496,7 +537,9 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(0);
             let mut game = game.lock().expect("game state lock");
-            game.decline_bank_proposal(&player, proposal_id);
+            if !game.reject_stopped_action() {
+                game.decline_bank_proposal(&player, proposal_id);
+            }
             json(200, &game.to_json())
         }
         ("POST", "/api/bank/proposal/counter") => {
@@ -512,7 +555,9 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
                 .and_then(|value| value.parse::<i32>().ok())
                 .unwrap_or(0);
             let mut game = game.lock().expect("game state lock");
-            game.counter_bank_proposal(&player, proposal_id, amount);
+            if !game.reject_stopped_action() {
+                game.counter_bank_proposal(&player, proposal_id, amount);
+            }
             json(200, &game.to_json())
         }
         ("POST", "/api/bank/admin-message") => {
@@ -570,16 +615,23 @@ fn spawn_ai_action(game: SharedGame) {
             game.ai_action_pending = false;
             return;
         };
-        let (decision, status) = match llm_ai_decision_for_prompt(&job.prompt) {
-            Ok(decision) => (
-                decision.constrained_for_fallback(job.fallback_decision),
+        let (decision, reason, status) = match llm_ai_decision_for_prompt(&job.prompt) {
+            Ok(answer) => (
+                answer
+                    .decision
+                    .constrained_for_fallback(job.fallback_decision),
+                answer.reason,
                 llm_config_label(),
             ),
-            Err(error) => (job.fallback_decision, format!("ai fallback: {error}")),
+            Err(error) => (
+                job.fallback_decision,
+                format!("Fallback: {error}"),
+                format!("ai fallback: {error}"),
+            ),
         };
         let mut game = game.lock().expect("game state lock");
         game.bank_ai_status = status;
-        game.apply_ai_turn_decision(&job.player_name, decision);
+        game.apply_ai_turn_decision(&job.player_name, decision, &reason);
         game.ai_action_pending = false;
     });
 }
@@ -659,9 +711,10 @@ fn llm_answer_for_prompt(prompt: &str) -> Result<String, String> {
     }
 }
 
-fn llm_ai_decision_for_prompt(prompt: &str) -> Result<AiDecision, String> {
+fn llm_ai_decision_for_prompt(prompt: &str) -> Result<AiTurnAnswer, String> {
     let answer = llm_answer_for_prompt(prompt)?;
-    AiDecision::from_llm_answer(&answer).ok_or_else(|| "LLM gav inget giltigt AI-drag".to_string())
+    AiTurnAnswer::from_llm_answer(&answer)
+        .ok_or_else(|| "LLM gav inget giltigt AI-drag".to_string())
 }
 
 fn health_json(game: &GameState) -> String {
@@ -747,6 +800,9 @@ impl GameState {
                 "{first_name} börjar och väljer pjäs först. Välj en av de fem klassiska pjäserna."
             ),
             bank_ai_status: llm_config_label(),
+            ai_turn_source: "idle".to_string(),
+            ai_turn_thought: String::new(),
+            stopped: false,
         }
     }
 
@@ -887,17 +943,42 @@ impl GameState {
         self.push_event(format!("Admin justerade {name}."));
     }
 
+    fn stop_game(&mut self) {
+        self.stopped = true;
+        self.ai_action_pending = false;
+        self.ai_turn_source = "stoppad".to_string();
+        self.ai_turn_thought = "Spelet är stoppat av admin.".to_string();
+        self.bank_message =
+            "Spelet är stoppat av admin. Starta nytt spel för att fortsätta.".to_string();
+        self.push_event("Admin stoppade pågående spel.".to_string());
+        self.push_bank_message(
+            "Banken",
+            "Spelet är stoppat av admin. Inga nya spelhandlingar körs.",
+            true,
+        );
+    }
+
+    fn reject_stopped_action(&mut self) -> bool {
+        if !self.stopped {
+            return false;
+        }
+        self.bank_message =
+            "Spelet är stoppat av admin. Starta nytt spel om ni vill fortsätta.".to_string();
+        true
+    }
+
     fn to_snapshot(&self) -> String {
         let mut lines = Vec::new();
         lines.push(format!(
-            "meta\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "meta\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.room_code,
             self.phase.as_str(),
             self.selection_cursor,
             self.current_player_index,
             self.dice[0],
             self.dice[1],
-            snapshot_escape(&self.bank_message)
+            snapshot_escape(&self.bank_message),
+            self.stopped
         ));
         lines.push(format!(
             "selection\t{}",
@@ -1006,6 +1087,7 @@ impl GameState {
                     game.current_player_index = parts[4].parse().ok()?;
                     game.dice = [parts[5].parse().ok()?, parts[6].parse().ok()?];
                     game.bank_message = snapshot_unescape(parts[7]);
+                    game.stopped = parts.get(8).map(|value| parse_bool(value)).unwrap_or(false);
                 }
                 "selection" if parts.len() >= 2 => {
                     game.selection_order = parts[1]
@@ -1793,7 +1875,12 @@ impl GameState {
             let dice_total = (self.dice[0] + self.dice[1]).max(1) as i32;
             return dice_total * if count >= 2 { 100 } else { 40 };
         }
-        let level = self.buildings[space_index] as usize;
+        self.rent_for_level(space_index, self.buildings[space_index])
+    }
+
+    fn rent_for_level(&self, space_index: usize, level: u8) -> i32 {
+        let space = &self.spaces[space_index];
+        let level = level as usize;
         if level > 0 {
             return space
                 .house_rents
@@ -2121,7 +2208,7 @@ impl GameState {
     }
 
     fn queue_ai_action_if_needed(&mut self) -> bool {
-        if self.ai_action_pending {
+        if self.stopped || self.ai_action_pending {
             return false;
         }
         let should_queue = match self.phase {
@@ -2160,12 +2247,17 @@ impl GameState {
                     .map(|player| player.name.clone())
                     .unwrap_or_else(|| "AI".to_string()),
             };
+            self.ai_turn_source = "väntar".to_string();
+            self.ai_turn_thought = format!("{name} tänker...");
             self.bank_message = format!("{name} tänker...");
         }
         should_queue
     }
 
     fn run_ai_action(&mut self) {
+        if self.stopped {
+            return;
+        }
         match self.phase {
             Phase::TokenSelection => self.select_ai_token(),
             Phase::Play => self.run_ai_play_action(),
@@ -2174,7 +2266,7 @@ impl GameState {
     }
 
     fn prepare_ai_turn_job(&mut self) -> Option<AiTurnJob> {
-        if self.phase != Phase::Play {
+        if self.stopped || self.phase != Phase::Play {
             return None;
         }
         let player_index = self.current_player_index;
@@ -2190,6 +2282,8 @@ impl GameState {
         let player_name = self.players[player_index].name.clone();
         let fallback_decision = self.fallback_ai_decision(player_index);
         let prompt = self.ai_turn_prompt(player_index, &settings, fallback_decision);
+        self.ai_turn_source = "LLM".to_string();
+        self.ai_turn_thought = format!("{player_name} frågar modellen efter nästa drag...");
         self.bank_message = format!("{player_name} tänker med AI...");
         Some(AiTurnJob {
             player_name,
@@ -2198,8 +2292,8 @@ impl GameState {
         })
     }
 
-    fn apply_ai_turn_decision(&mut self, player_name: &str, decision: AiDecision) {
-        if self.phase != Phase::Play {
+    fn apply_ai_turn_decision(&mut self, player_name: &str, decision: AiDecision, reason: &str) {
+        if self.stopped || self.phase != Phase::Play {
             return;
         }
         let player_index = self.current_player_index;
@@ -2216,14 +2310,32 @@ impl GameState {
             return;
         }
         let fallback = self.fallback_ai_decision(player_index);
+        let requested = decision;
+        let mut used_fallback = false;
         let chosen = if self.perform_ai_decision(player_index, decision) {
             decision
         } else {
+            used_fallback = true;
             fallback
         };
         if chosen != decision {
             let _ = self.perform_ai_decision(player_index, fallback);
         }
+        let status_is_fallback = self.bank_ai_status.starts_with("ai fallback");
+        let source = if status_is_fallback || used_fallback {
+            "Fallback"
+        } else {
+            "LLM"
+        };
+        self.ai_turn_source = source.to_string();
+        self.ai_turn_thought = self.ai_turn_thought_text(
+            player_name,
+            source,
+            requested,
+            chosen,
+            reason,
+            used_fallback,
+        );
     }
 
     fn perform_ai_decision(&mut self, player_index: usize, decision: AiDecision) -> bool {
@@ -2272,7 +2384,50 @@ impl GameState {
                 self.declare_bankruptcy(player_index);
                 true
             }
+            AiDecision::Build => self.ai_build_once(player_index),
+            AiDecision::Trade => self.ai_propose_trade_once(player_index),
+            AiDecision::AcceptProposal => {
+                let Some(proposal_id) = self.pending_bank_proposal_for(player_index) else {
+                    return false;
+                };
+                self.accept_bank_proposal(&player_name, proposal_id);
+                true
+            }
+            AiDecision::DeclineProposal => {
+                let Some(proposal_id) = self.pending_bank_proposal_for(player_index) else {
+                    return false;
+                };
+                self.decline_bank_proposal(&player_name, proposal_id);
+                true
+            }
             AiDecision::Wait => false,
+        }
+    }
+
+    fn ai_turn_thought_text(
+        &self,
+        player_name: &str,
+        source: &str,
+        requested: AiDecision,
+        chosen: AiDecision,
+        reason: &str,
+        used_fallback: bool,
+    ) -> String {
+        let reason = clean_ai_reason(reason);
+        let action_text = if used_fallback {
+            format!(
+                "{} föreslog {}, men servern körde {}.",
+                source,
+                requested.label_sv(),
+                chosen.label_sv()
+            )
+        } else {
+            format!("{} valde {}.", source, chosen.label_sv())
+        };
+        if reason.is_empty() {
+            format!("{player_name}: {action_text}")
+        } else {
+            format!("{player_name}: {action_text} {reason}")
         }
     }
 
@@ -2287,6 +2442,13 @@ impl GameState {
                 };
             }
         }
+        if let Some(proposal) = self.awaiting_bank_proposal_for(player_index) {
+            return if self.ai_should_accept_proposal(proposal, player_index) {
+                AiDecision::AcceptProposal
+            } else {
+                AiDecision::DeclineProposal
+            };
+        }
         if self.players[player_index].cash < 0 {
             return if self.has_ai_liquidation_option(player_index) {
                 AiDecision::Liquidate
@@ -2300,6 +2462,12 @@ impl GameState {
         {
             return AiDecision::PayJail;
         }
+        if self.ai_build_target(player_index).is_some() {
+            return AiDecision::Build;
+        }
+        if self.ai_trade_candidate(player_index).is_some() {
+            return AiDecision::Trade;
+        }
         AiDecision::Roll
     }
 
@@ -2308,6 +2476,9 @@ impl GameState {
             if offer.player_index == player_index {
                 return vec![AiDecision::Buy, AiDecision::Decline];
             }
+        }
+        if self.pending_bank_proposal_for(player_index).is_some() {
+            return vec![AiDecision::AcceptProposal, AiDecision::DeclineProposal];
         }
         if self.players[player_index].cash < 0 {
             let mut actions = Vec::new();
@@ -2324,7 +2495,15 @@ impl GameState {
             }
             return actions;
         }
-        vec![AiDecision::Roll]
+        let mut actions = Vec::new();
+        if self.ai_build_target(player_index).is_some() {
+            actions.push(AiDecision::Build);
+        }
+        if self.ai_trade_candidate(player_index).is_some() {
+            actions.push(AiDecision::Trade);
+        }
+        actions.push(AiDecision::Roll);
+        actions
     }
 
     fn ai_turn_prompt(
@@ -2494,6 +2673,198 @@ impl GameState {
             return true;
         }
         false
+    }
+
+    fn ai_build_once(&mut self, player_index: usize) -> bool {
+        let Some(space_index) = self.ai_build_target(player_index) else {
+            return false;
+        };
+        let name = self.players[player_index].name.clone();
+        self.build_property(space_index, &name);
+        true
+    }
+
+    fn ai_build_target(&self, player_index: usize) -> Option<usize> {
+        self.spaces
+            .iter()
+            .filter(|space| space.kind == "property")
+            .filter(|space| self.owners[space.index] == Some(player_index))
+            .filter(|space| self.build_error(player_index, space.index).is_none())
+            .filter(|space| {
+                let cost = space.build_cost.unwrap_or(0);
+                self.players[player_index].cash >= cost + 1000
+            })
+            .max_by_key(|space| {
+                let current = self.rent_for_space(space.index);
+                let next_level = self.buildings[space.index].saturating_add(1);
+                let next_rent = self.rent_for_level(space.index, next_level);
+                (
+                    next_rent - current,
+                    std::cmp::Reverse(self.buildings[space.index]),
+                )
+            })
+            .map(|space| space.index)
+    }
+
+    fn ai_propose_trade_once(&mut self, player_index: usize) -> bool {
+        let Some(proposal) = self.ai_trade_candidate(player_index) else {
+            return false;
+        };
+        let answer = self.push_bank_proposal(proposal);
+        let name = self.players[player_index].name.clone();
+        self.bank_message = format!("AI-handeln från {name}: {answer}");
+        self.push_bank_message("Banken", &self.bank_message.clone(), true);
+        true
+    }
+
+    fn ai_trade_candidate(&self, player_index: usize) -> Option<BankProposal> {
+        if self
+            .bank_proposals
+            .iter()
+            .any(|proposal| proposal.requester_index == player_index)
+        {
+            return None;
+        }
+        let rules = load_bank_rules();
+        let mut best: Option<(i32, BankProposal)> = None;
+        let colors = self
+            .spaces
+            .iter()
+            .filter_map(|space| space.color.as_deref())
+            .collect::<Vec<_>>();
+
+        for color in colors {
+            let group = self.color_group_indices(color);
+            if group.len() < 2 {
+                continue;
+            }
+            let owned = group
+                .iter()
+                .filter(|index| self.owners[**index] == Some(player_index))
+                .count();
+            if owned == 0 || owned == group.len() {
+                continue;
+            }
+            for space_index in &group {
+                let Some(owner) = self.owners[*space_index] else {
+                    continue;
+                };
+                if owner == player_index || self.players[owner].bankrupt {
+                    continue;
+                }
+                if self.has_buildings_in_group(*space_index) {
+                    continue;
+                }
+                if self.bank_proposals.iter().any(|proposal| {
+                    proposal.requester_index == player_index
+                        && proposal.counterparty_index == owner
+                        && proposal.spaces_from_counterparty.contains(space_index)
+                }) {
+                    continue;
+                }
+                let price = self.spaces[*space_index].price.unwrap_or(0);
+                if price <= 0 {
+                    continue;
+                }
+                let missing = group.len().saturating_sub(owned);
+                let premium = if missing == 1 { 600 } else { 200 };
+                let amount = ((price * 14) / 10 + premium).min(rules.trade_cash_limit);
+                if amount <= 0 || self.players[player_index].cash < amount + 1000 {
+                    continue;
+                }
+                let score = (owned as i32 * 10_000)
+                    + if missing == 1 { 5_000 } else { 0 }
+                    + self.rent_for_space(*space_index);
+                let proposal = BankProposal {
+                    id: 0,
+                    kind: "ai_cash_offer".to_string(),
+                    requester_index: player_index,
+                    counterparty_index: owner,
+                    awaiting_player_index: owner,
+                    cash_from_requester: amount,
+                    cash_from_counterparty: 0,
+                    spaces_from_requester: Vec::new(),
+                    spaces_from_counterparty: vec![*space_index],
+                    note: format!("AI vill samla {}-gruppen.", color_group_label(color)),
+                };
+                if best
+                    .as_ref()
+                    .map(|(best_score, _)| score > *best_score)
+                    .unwrap_or(true)
+                {
+                    best = Some((score, proposal));
+                }
+            }
+        }
+        best.map(|(_, proposal)| proposal)
+    }
+
+    fn pending_bank_proposal_for(&self, player_index: usize) -> Option<u64> {
+        self.awaiting_bank_proposal_for(player_index)
+            .map(|proposal| proposal.id)
+    }
+
+    fn awaiting_bank_proposal_for(&self, player_index: usize) -> Option<&BankProposal> {
+        self.bank_proposals
+            .iter()
+            .find(|proposal| proposal.awaiting_player_index == player_index)
+    }
+
+    fn ai_should_accept_proposal(&self, proposal: &BankProposal, player_index: usize) -> bool {
+        if self.proposal_breaks_complete_group(proposal, player_index) {
+            return false;
+        }
+        self.proposal_value_for_player(proposal, player_index) >= 0
+    }
+
+    fn proposal_value_for_player(&self, proposal: &BankProposal, player_index: usize) -> i32 {
+        let mut value = 0;
+        if proposal.requester_index == player_index {
+            value -= proposal.cash_from_requester;
+            value += proposal.cash_from_counterparty;
+            value -= self.spaces_value(&proposal.spaces_from_requester);
+            value += self.spaces_value(&proposal.spaces_from_counterparty);
+        } else if proposal.counterparty_index == player_index {
+            value += proposal.cash_from_requester;
+            value -= proposal.cash_from_counterparty;
+            value += self.spaces_value(&proposal.spaces_from_requester);
+            value -= self.spaces_value(&proposal.spaces_from_counterparty);
+        }
+        value
+    }
+
+    fn proposal_breaks_complete_group(&self, proposal: &BankProposal, player_index: usize) -> bool {
+        let lost_spaces = if proposal.requester_index == player_index {
+            &proposal.spaces_from_requester
+        } else if proposal.counterparty_index == player_index {
+            &proposal.spaces_from_counterparty
+        } else {
+            return false;
+        };
+        lost_spaces.iter().any(|space_index| {
+            let Some(color) = self.spaces[*space_index].color.as_deref() else {
+                return false;
+            };
+            let group = self.color_group_indices(color);
+            !group.is_empty()
+                && group
+                    .iter()
+                    .all(|index| self.owners[*index] == Some(player_index))
+        })
+    }
+
+    fn spaces_value(&self, indexes: &[usize]) -> i32 {
+        indexes
+            .iter()
+            .filter_map(|index| self.spaces.get(*index))
+            .map(|space| {
+                let base = space
+                    .price
+                    .unwrap_or_else(|| self.rent_for_space(space.index) * 10);
+                let buildings = self.buildings[space.index] as i32 * space.build_cost.unwrap_or(0);
+                base + buildings
+            })
+            .sum()
     }
 
     fn has_ai_liquidation_option(&self, player_index: usize) -> bool {
@@ -2789,6 +3160,12 @@ impl GameState {
         }
 
         self.push_bank_message(&player_name, &message, false);
+        if self.stopped {
+            let answer = "Spelet är stoppat av admin. Jag kan inte göra lån, byten, konkurs eller andra spelhandlingar förrän ett nytt spel startas.";
+            self.bank_message = format!("Banken till {player_name}: {answer}");
+            self.push_bank_message("Banken", answer, true);
+            return None;
+        }
         if let Some(answer) = self.try_bank_broker_action(&player_name, &message) {
             self.bank_message = format!("Banken till {player_name}: {answer}");
             self.push_bank_message("Banken", &answer, true);
@@ -3371,11 +3748,14 @@ impl GameState {
             .join(",");
 
         format!(
-            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"dice\":[{},{}],\"freeParkingPot\":{},\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"assetActions\":[{}],\"bankProposals\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}],\"bankChat\":[{}]}}",
+            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"aiTurnSource\":\"{}\",\"aiTurnThought\":\"{}\",\"stopped\":{},\"dice\":[{},{}],\"freeParkingPot\":{},\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"assetActions\":[{}],\"bankProposals\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}],\"bankChat\":[{}]}}",
             escape_json(&self.room_code),
             self.phase.as_str(),
             escape_json(current),
             escape_json(&self.bank_message),
+            escape_json(&self.ai_turn_source),
+            escape_json(&self.ai_turn_thought),
+            self.stopped,
             self.dice[0],
             self.dice[1],
             self.free_parking_pot,
@@ -3623,6 +4003,18 @@ impl PlayerController {
     }
 }
 
+impl AiTurnAnswer {
+    fn from_llm_answer(answer: &str) -> Option<Self> {
+        let decision = AiDecision::from_llm_answer(answer)?;
+        let reason = json_string_field(answer, "reason")
+            .or_else(|| json_string_field(answer, "motivering"))
+            .map(|reason| clean_ai_reason(&reason))
+            .filter(|reason| !reason.is_empty())
+            .unwrap_or_else(|| "Ingen tydlig motivering från modellen.".to_string());
+        Some(Self { decision, reason })
+    }
+}
+
 impl AiDecision {
     fn as_str(self) -> &'static str {
         match self {
@@ -3632,7 +4024,27 @@ impl AiDecision {
             AiDecision::PayJail => "pay_jail",
             AiDecision::Liquidate => "liquidate",
             AiDecision::Bankrupt => "bankrupt",
+            AiDecision::Build => "build",
+            AiDecision::Trade => "trade",
+            AiDecision::AcceptProposal => "accept_proposal",
+            AiDecision::DeclineProposal => "decline_proposal",
             AiDecision::Wait => "wait",
+        }
+    }
+
+    fn label_sv(self) -> &'static str {
+        match self {
+            AiDecision::Buy => "köp",
+            AiDecision::Decline => "avstå",
+            AiDecision::Roll => "tärningsslag",
+            AiDecision::PayJail => "betala fängelse",
+            AiDecision::Liquidate => "sälja/panta",
+            AiDecision::Bankrupt => "konkurs",
+            AiDecision::Build => "bygga",
+            AiDecision::Trade => "handelsbud",
+            AiDecision::AcceptProposal => "acceptera förslag",
+            AiDecision::DeclineProposal => "avböja förslag",
+            AiDecision::Wait => "vänta",
         }
     }
 
@@ -3646,6 +4058,16 @@ impl AiDecision {
                 Some(AiDecision::Liquidate)
             }
             "bankrupt" | "konkurs" => Some(AiDecision::Bankrupt),
+            "build" | "bygg" | "bygga" | "house" | "hotel" | "hus" | "hotell" => {
+                Some(AiDecision::Build)
+            }
+            "trade" | "byt" | "byta" | "byte" | "deal" | "bud" | "buda" => Some(AiDecision::Trade),
+            "acceptproposal" | "accept" | "acceptera" | "godkann" | "godkanna" => {
+                Some(AiDecision::AcceptProposal)
+            }
+            "declineproposal" | "reject" | "avbojj" | "avboj" | "neka" => {
+                Some(AiDecision::DeclineProposal)
+            }
             "wait" | "vanta" => Some(AiDecision::Wait),
             _ => None,
         }
@@ -3669,6 +4091,16 @@ impl AiDecision {
             ("avsta", AiDecision::Decline),
             ("buy", AiDecision::Buy),
             ("kop", AiDecision::Buy),
+            ("acceptproposal", AiDecision::AcceptProposal),
+            ("accept", AiDecision::AcceptProposal),
+            ("acceptera", AiDecision::AcceptProposal),
+            ("declineproposal", AiDecision::DeclineProposal),
+            ("reject", AiDecision::DeclineProposal),
+            ("avboj", AiDecision::DeclineProposal),
+            ("build", AiDecision::Build),
+            ("bygg", AiDecision::Build),
+            ("trade", AiDecision::Trade),
+            ("byt", AiDecision::Trade),
             ("roll", AiDecision::Roll),
             ("sla", AiDecision::Roll),
             ("wait", AiDecision::Wait),
@@ -4231,6 +4663,15 @@ fn clean_chat_message(message: &str) -> String {
         .collect()
 }
 
+fn clean_ai_reason(message: &str) -> String {
+    message
+        .trim()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(180)
+        .collect()
+}
+
 fn parse_ai_names(names: &str) -> Vec<String> {
     names
         .split(',')
@@ -4606,6 +5047,38 @@ Offensiv och bytesglad.
 
         assert_eq!(game.owners[1], Some(0));
         assert_eq!(game.players[0].cash, cash_before - price);
+    }
+
+    #[test]
+    fn stopped_game_blocks_ai_queue_and_player_actions() {
+        let mut game = playable_game();
+        game.players[0].controller = PlayerController::Ai;
+        game.stop_game();
+
+        assert!(!game.queue_ai_action_if_needed());
+        if !game.reject_stopped_action() {
+            game.roll_current_player("");
+        }
+
+        assert_eq!(game.players[0].position, 0);
+        assert!(game.bank_message.contains("stoppat"));
+    }
+
+    #[test]
+    fn ai_player_can_create_trade_proposal_for_color_group() {
+        let mut game = playable_game();
+        game.players[0].name = "Rut".to_string();
+        game.players[1].name = "Bosse".to_string();
+        game.players[0].controller = PlayerController::Ai;
+        game.owners[1] = Some(0);
+        game.owners[3] = Some(1);
+
+        assert!(game.ai_propose_trade_once(0));
+
+        assert_eq!(game.bank_proposals.len(), 1);
+        assert_eq!(game.bank_proposals[0].requester_index, 0);
+        assert_eq!(game.bank_proposals[0].counterparty_index, 1);
+        assert_eq!(game.bank_proposals[0].spaces_from_counterparty, vec![3]);
     }
 
     #[test]
