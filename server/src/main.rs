@@ -695,6 +695,14 @@ fn llm_config_label() -> String {
 }
 
 fn llm_answer_for_prompt(prompt: &str) -> Result<String, String> {
+    llm_answer_for_prompt_mode(prompt, false, 180).map(|answer| clean_chat_message(&answer))
+}
+
+fn llm_answer_for_prompt_mode(
+    prompt: &str,
+    json_mode: bool,
+    num_predict: u16,
+) -> Result<String, String> {
     let llm_url =
         env::var("EUTHERPAL_LLM_URL").map_err(|_| "EUTHERPAL_LLM_URL saknas".to_string())?;
     if llm_url.trim().is_empty() || llm_url == "mock" {
@@ -702,9 +710,9 @@ fn llm_answer_for_prompt(prompt: &str) -> Result<String, String> {
     }
     let settings = load_settings();
     let model = llm_model_name(&settings);
-    let answer = call_ollama_generate(&llm_url, &model, prompt)
+    let answer = call_ollama_generate(&llm_url, &model, prompt, json_mode, num_predict)
         .map_err(|error| llm_io_error_message(&error))
-        .map(|answer| clean_chat_message(&answer))?;
+        .map(|answer| answer.trim().to_string())?;
     if answer.is_empty() {
         Err("LLM gav tomt svar".to_string())
     } else {
@@ -730,7 +738,7 @@ fn llm_io_error_message(error: &std::io::Error) -> String {
 }
 
 fn llm_ai_decision_for_prompt(prompt: &str) -> Result<AiTurnAnswer, String> {
-    let answer = llm_answer_for_prompt(prompt)?;
+    let answer = llm_answer_for_prompt_mode(prompt, true, 96)?;
     AiTurnAnswer::from_llm_answer(&answer)
         .ok_or_else(|| "LLM gav inget giltigt AI-drag".to_string())
 }
@@ -4287,17 +4295,30 @@ fn json_string_field(json: &str, key: &str) -> Option<String> {
     None
 }
 
-fn call_ollama_generate(url: &str, model: &str, prompt: &str) -> std::io::Result<String> {
+fn call_ollama_generate(
+    url: &str,
+    model: &str,
+    prompt: &str,
+    json_mode: bool,
+    num_predict: u16,
+) -> std::io::Result<String> {
     let (host, port, path) = parse_http_url(url).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "bara http:// stöds för LLM",
         )
     })?;
+    let format_field = if json_mode {
+        ",\"format\":\"json\""
+    } else {
+        ""
+    };
     let body = format!(
-        "{{\"model\":\"{}\",\"prompt\":\"{}\",\"stream\":false,\"options\":{{\"temperature\":0.25,\"num_predict\":96}}}}",
+        "{{\"model\":\"{}\",\"prompt\":\"{}\",\"stream\":false{},\"options\":{{\"temperature\":0.25,\"num_predict\":{}}}}}",
         escape_json(model),
-        escape_json(prompt)
+        escape_json(prompt),
+        format_field,
+        num_predict
     );
     let timeout = Duration::from_secs(llm_timeout_secs());
     let mut stream = TcpStream::connect((host.as_str(), port))?;
