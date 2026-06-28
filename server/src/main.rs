@@ -5,7 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const TV_HTML: &str = include_str!("../../web/tv/index.html");
 const MOBILE_HTML: &str = include_str!("../../web/mobile/index.html");
@@ -34,6 +34,7 @@ const MAX_PLAYER_COUNT: usize = 5;
 const GO_SALARY: i32 = 2000;
 const JAIL_FINE: i32 = 500;
 const AUCTION_MIN_MS: u128 = 20_000;
+const DEFAULT_LLM_TIMEOUT_SECS: u64 = 90;
 
 const TOKEN_CHOICES: &[(&str, &str)] = &[
     ("bil", "Bil"),
@@ -702,12 +703,29 @@ fn llm_answer_for_prompt(prompt: &str) -> Result<String, String> {
     let settings = load_settings();
     let model = llm_model_name(&settings);
     let answer = call_ollama_generate(&llm_url, &model, prompt)
-        .map_err(|error| error.to_string())
+        .map_err(|error| llm_io_error_message(&error))
         .map(|answer| clean_chat_message(&answer))?;
     if answer.is_empty() {
         Err("LLM gav tomt svar".to_string())
     } else {
         Ok(answer)
+    }
+}
+
+fn llm_timeout_secs() -> u64 {
+    env::var("EUTHERPAL_LLM_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_LLM_TIMEOUT_SECS)
+        .clamp(10, 240)
+}
+
+fn llm_io_error_message(error: &std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+            format!("LLM hann inte svara inom {} sekunder", llm_timeout_secs())
+        }
+        _ => error.to_string(),
     }
 }
 
@@ -4217,7 +4235,7 @@ fn binary_asset(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> {
     };
 
     let mut response = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store, no-cache, must-revalidate, max-age=0\r\nPragma: no-cache\r\nExpires: 0\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
         body.len()
     )
     .into_bytes();
@@ -4277,13 +4295,14 @@ fn call_ollama_generate(url: &str, model: &str, prompt: &str) -> std::io::Result
         )
     })?;
     let body = format!(
-        "{{\"model\":\"{}\",\"prompt\":\"{}\",\"stream\":false}}",
+        "{{\"model\":\"{}\",\"prompt\":\"{}\",\"stream\":false,\"options\":{{\"temperature\":0.25,\"num_predict\":96}}}}",
         escape_json(model),
         escape_json(prompt)
     );
+    let timeout = Duration::from_secs(llm_timeout_secs());
     let mut stream = TcpStream::connect((host.as_str(), port))?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(25)))?;
-    stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let request = format!(
         "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.as_bytes().len()

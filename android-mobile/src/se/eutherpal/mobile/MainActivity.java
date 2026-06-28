@@ -51,6 +51,7 @@ public final class MainActivity extends Activity {
         settings.setUseWideViewPort(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
         disableForceDark(settings);
 
         webView.setWebViewClient(new WebViewClient() {
@@ -85,7 +86,7 @@ public final class MainActivity extends Activity {
         root.addView(statusView, statusParams);
         setContentView(root);
 
-        webView.loadUrl(serverUrl());
+        loadServerUrl();
     }
 
     @Override
@@ -100,7 +101,7 @@ public final class MainActivity extends Activity {
                 if (webView.canGoBack()) {
                     webView.goBack();
                 } else {
-                    webView.reload();
+                    loadServerUrl();
                     showStatus("Laddar om EutherPål...");
                 }
                 return true;
@@ -116,6 +117,16 @@ public final class MainActivity extends Activity {
     private String serverUrl() {
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         return prefs.getString(KEY_SERVER_URL, getString(R.string.default_server_url));
+    }
+
+    private void loadServerUrl() {
+        webView.clearCache(true);
+        webView.loadUrl(cacheBustedUrl(serverUrl()));
+    }
+
+    private String cacheBustedUrl(String url) {
+        String separator = url.contains("?") ? "&" : "?";
+        return url + separator + "_ep=" + System.currentTimeMillis();
     }
 
     private void saveServerUrl(String value) {
@@ -144,7 +155,7 @@ public final class MainActivity extends Activity {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
                         saveServerUrl(input.getText().toString());
-                        webView.loadUrl(serverUrl());
+                        loadServerUrl();
                     }
                 })
                 .setNegativeButton("Avbryt", null)
@@ -152,7 +163,7 @@ public final class MainActivity extends Activity {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
                         saveServerUrl(getString(R.string.default_server_url));
-                        webView.loadUrl(serverUrl());
+                        loadServerUrl();
                     }
                 })
                 .show();
