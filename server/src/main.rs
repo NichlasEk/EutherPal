@@ -18,6 +18,9 @@ const TOKEN_SKEPP_PNG: &[u8] = include_bytes!("../../web/assets/tokens/skepp.png
 const TOKEN_HUND_PNG: &[u8] = include_bytes!("../../web/assets/tokens/hund.png");
 const TOKEN_SKO_PNG: &[u8] = include_bytes!("../../web/assets/tokens/sko.png");
 const DEFAULT_PREPROMPT: &str = include_str!("../../prompts/supergemma.bank.sv.md");
+const DEFAULT_AI_TURN_PROMPT: &str = include_str!("../../prompts/ai-player-turn.sv.md");
+const DEFAULT_AI_PROFILES_TOML: &str =
+    include_str!("../../prompts/ai-player-profiles.example.toml");
 const BOARD_TOML: &str = include_str!("../../rules/board.lindesberg.toml");
 const CARDS_TOML: &str = include_str!("../../rules/cards.sv.toml");
 const DEFAULT_BANK_RULES_TOML: &str = include_str!("../../rules/bank.rules.toml");
@@ -115,6 +118,23 @@ struct BankAsyncJob {
     player_name: String,
     prompt: String,
     fallback_answer: String,
+}
+
+struct AiTurnJob {
+    player_name: String,
+    prompt: String,
+    fallback_decision: AiDecision,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum AiDecision {
+    Buy,
+    Decline,
+    Roll,
+    PayJail,
+    Liquidate,
+    Bankrupt,
+    Wait,
 }
 
 #[derive(Clone)]
@@ -253,6 +273,10 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
             let mut settings = load_settings();
             settings.model = form_value(&body, "model").unwrap_or(settings.model);
             settings.preprompt = form_value(&body, "preprompt").unwrap_or(settings.preprompt);
+            settings.ai_turn_prompt =
+                form_value(&body, "aiTurnPrompt").unwrap_or(settings.ai_turn_prompt);
+            settings.ai_profiles_toml =
+                form_value(&body, "aiProfilesToml").unwrap_or(settings.ai_profiles_toml);
             match save_settings(&settings) {
                 Ok(()) => json(200, &settings.to_json()),
                 Err(error) => json(
@@ -532,8 +556,30 @@ fn spawn_bank_answer(game: SharedGame, job: BankAsyncJob) {
 fn spawn_ai_action(game: SharedGame) {
     thread::spawn(move || {
         thread::sleep(std::time::Duration::from_millis(650));
+        let ai_job = {
+            let mut game = game.lock().expect("game state lock");
+            if game.phase == Phase::TokenSelection || game.phase == Phase::Auction {
+                game.run_ai_action();
+                game.ai_action_pending = false;
+                return;
+            }
+            game.prepare_ai_turn_job()
+        };
+        let Some(job) = ai_job else {
+            let mut game = game.lock().expect("game state lock");
+            game.ai_action_pending = false;
+            return;
+        };
+        let (decision, status) = match llm_ai_decision_for_prompt(&job.prompt) {
+            Ok(decision) => (
+                decision.constrained_for_fallback(job.fallback_decision),
+                llm_config_label(),
+            ),
+            Err(error) => (job.fallback_decision, format!("ai fallback: {error}")),
+        };
         let mut game = game.lock().expect("game state lock");
-        game.run_ai_action();
+        game.bank_ai_status = status;
+        game.apply_ai_turn_decision(&job.player_name, decision);
         game.ai_action_pending = false;
     });
 }
@@ -541,6 +587,8 @@ fn spawn_ai_action(game: SharedGame) {
 struct Settings {
     model: String,
     preprompt: String,
+    ai_turn_prompt: String,
+    ai_profiles_toml: String,
 }
 
 impl Settings {
@@ -548,23 +596,29 @@ impl Settings {
         Self {
             model: DEFAULT_MODEL.to_string(),
             preprompt: DEFAULT_PREPROMPT.trim().to_string(),
+            ai_turn_prompt: DEFAULT_AI_TURN_PROMPT.trim().to_string(),
+            ai_profiles_toml: DEFAULT_AI_PROFILES_TOML.trim().to_string(),
         }
     }
 
     fn to_json(&self) -> String {
         format!(
-            "{{\"model\":\"{}\",\"preprompt\":\"{}\",\"path\":\"{}\"}}",
+            "{{\"model\":\"{}\",\"preprompt\":\"{}\",\"aiTurnPrompt\":\"{}\",\"aiProfilesToml\":\"{}\",\"path\":\"{}\"}}",
             escape_json(&self.model),
             escape_json(&self.preprompt),
+            escape_json(&self.ai_turn_prompt),
+            escape_json(&self.ai_profiles_toml),
             SETTINGS_PATH
         )
     }
 
     fn to_toml(&self) -> String {
         format!(
-            "[llm]\nmodel = \"{}\"\n\n[bank]\npreprompt = \"\"\"\n{}\n\"\"\"\n",
+            "[llm]\nmodel = \"{}\"\n\n[bank]\npreprompt = \"\"\"\n{}\n\"\"\"\n\n[ai_players]\nturn_prompt = \"\"\"\n{}\n\"\"\"\nprofiles_toml = '''\n{}\n'''\n",
             escape_toml_string(&self.model),
-            escape_toml_multiline(&self.preprompt)
+            escape_toml_multiline(&self.preprompt),
+            escape_toml_multiline(&self.ai_turn_prompt),
+            escape_toml_literal_multiline(&self.ai_profiles_toml)
         )
     }
 }
@@ -603,6 +657,11 @@ fn llm_answer_for_prompt(prompt: &str) -> Result<String, String> {
     } else {
         Ok(answer)
     }
+}
+
+fn llm_ai_decision_for_prompt(prompt: &str) -> Result<AiDecision, String> {
+    let answer = llm_answer_for_prompt(prompt)?;
+    AiDecision::from_llm_answer(&answer).ok_or_else(|| "LLM gav inget giltigt AI-drag".to_string())
 }
 
 fn health_json(game: &GameState) -> String {
@@ -2114,6 +2173,238 @@ impl GameState {
         }
     }
 
+    fn prepare_ai_turn_job(&mut self) -> Option<AiTurnJob> {
+        if self.phase != Phase::Play {
+            return None;
+        }
+        let player_index = self.current_player_index;
+        if self
+            .players
+            .get(player_index)
+            .map(|player| player.controller != PlayerController::Ai || player.bankrupt)
+            .unwrap_or(true)
+        {
+            return None;
+        }
+        let settings = load_settings();
+        let player_name = self.players[player_index].name.clone();
+        let fallback_decision = self.fallback_ai_decision(player_index);
+        let prompt = self.ai_turn_prompt(player_index, &settings, fallback_decision);
+        self.bank_message = format!("{player_name} tänker med AI...");
+        Some(AiTurnJob {
+            player_name,
+            prompt,
+            fallback_decision,
+        })
+    }
+
+    fn apply_ai_turn_decision(&mut self, player_name: &str, decision: AiDecision) {
+        if self.phase != Phase::Play {
+            return;
+        }
+        let player_index = self.current_player_index;
+        if self
+            .players
+            .get(player_index)
+            .map(|player| {
+                player.name != player_name
+                    || player.controller != PlayerController::Ai
+                    || player.bankrupt
+            })
+            .unwrap_or(true)
+        {
+            return;
+        }
+        let fallback = self.fallback_ai_decision(player_index);
+        let chosen = if self.perform_ai_decision(player_index, decision) {
+            decision
+        } else {
+            fallback
+        };
+        if chosen != decision {
+            let _ = self.perform_ai_decision(player_index, fallback);
+        }
+    }
+
+    fn perform_ai_decision(&mut self, player_index: usize, decision: AiDecision) -> bool {
+        let player_name = self.players[player_index].name.clone();
+        match decision {
+            AiDecision::Buy => {
+                let Some(offer) = &self.pending_offer else {
+                    return false;
+                };
+                if offer.player_index != player_index {
+                    return false;
+                }
+                self.buy_pending_property(&player_name);
+                true
+            }
+            AiDecision::Decline => {
+                let Some(offer) = &self.pending_offer else {
+                    return false;
+                };
+                if offer.player_index != player_index {
+                    return false;
+                }
+                self.decline_pending_property(&player_name);
+                true
+            }
+            AiDecision::Roll => {
+                if self.pending_offer.is_some() || self.players[player_index].cash < 0 {
+                    return false;
+                }
+                self.roll_current_player(&player_name);
+                true
+            }
+            AiDecision::PayJail => {
+                if !self.players[player_index].jailed || self.players[player_index].cash < JAIL_FINE
+                {
+                    return false;
+                }
+                self.pay_jail_fine(&player_name);
+                true
+            }
+            AiDecision::Liquidate => self.ai_liquidate_once(player_index),
+            AiDecision::Bankrupt => {
+                if self.players[player_index].cash >= 0 {
+                    return false;
+                }
+                self.declare_bankruptcy(player_index);
+                true
+            }
+            AiDecision::Wait => false,
+        }
+    }
+
+    fn fallback_ai_decision(&self, player_index: usize) -> AiDecision {
+        if let Some(offer) = &self.pending_offer {
+            if offer.player_index == player_index {
+                let price = self.spaces[offer.space_index].price.unwrap_or(0);
+                return if self.players[player_index].cash >= price {
+                    AiDecision::Buy
+                } else {
+                    AiDecision::Decline
+                };
+            }
+        }
+        if self.players[player_index].cash < 0 {
+            return if self.has_ai_liquidation_option(player_index) {
+                AiDecision::Liquidate
+            } else {
+                AiDecision::Bankrupt
+            };
+        }
+        if self.players[player_index].jailed
+            && self.players[player_index].cash >= JAIL_FINE + 1000
+            && self.players[player_index].jail_turns >= 1
+        {
+            return AiDecision::PayJail;
+        }
+        AiDecision::Roll
+    }
+
+    fn ai_allowed_actions(&self, player_index: usize) -> Vec<AiDecision> {
+        if let Some(offer) = &self.pending_offer {
+            if offer.player_index == player_index {
+                return vec![AiDecision::Buy, AiDecision::Decline];
+            }
+        }
+        if self.players[player_index].cash < 0 {
+            let mut actions = Vec::new();
+            if self.has_ai_liquidation_option(player_index) {
+                actions.push(AiDecision::Liquidate);
+            }
+            actions.push(AiDecision::Bankrupt);
+            return actions;
+        }
+        if self.players[player_index].jailed {
+            let mut actions = vec![AiDecision::Roll];
+            if self.players[player_index].cash >= JAIL_FINE {
+                actions.push(AiDecision::PayJail);
+            }
+            return actions;
+        }
+        vec![AiDecision::Roll]
+    }
+
+    fn ai_turn_prompt(
+        &self,
+        player_index: usize,
+        settings: &Settings,
+        fallback_decision: AiDecision,
+    ) -> String {
+        let player = &self.players[player_index];
+        let space = &self.spaces[player.position];
+        let allowed_actions = self
+            .ai_allowed_actions(player_index)
+            .into_iter()
+            .map(AiDecision::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let personality = ai_personality_for_player(&player.name, &settings.ai_profiles_toml)
+            .unwrap_or_else(|| "Ingen särskild personlighetsprofil. Spela rimligt.".to_string());
+        let players = self
+            .players
+            .iter()
+            .map(|other| {
+                let other_space = self
+                    .spaces
+                    .get(other.position)
+                    .map(|space| space.name.as_str())
+                    .unwrap_or("okänd ruta");
+                format!(
+                    "- {}{}: {} kr, står på {}, äger {}",
+                    other.name,
+                    if other.controller == PlayerController::Ai {
+                        " (AI)"
+                    } else {
+                        ""
+                    },
+                    other.cash,
+                    other_space,
+                    self.owned_assets_summary(
+                        self.player_index_by_name(&other.name)
+                            .unwrap_or(player_index)
+                    )
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let pending = self
+            .pending_offer
+            .as_ref()
+            .map(|offer| {
+                format!(
+                    "Pending köp: {} kan köpa {} för {} kr.",
+                    self.players[offer.player_index].name,
+                    self.spaces[offer.space_index].name,
+                    self.spaces[offer.space_index].price.unwrap_or(0)
+                )
+            })
+            .unwrap_or_else(|| "Inget pending köp.".to_string());
+        format!(
+            "{}\n\nPersonlighet för {}:\n{}\n\nAktuell AI-spelare:\n- Namn: {}\n- Pengar: {} kr\n- Ruta: {} ({})\n- Fängelse: {}, försök {}\n- Ägda tillgångar: {}\n\nSpelläget:\nFas: {}\nTur: {}\nBankmeddelande: {}\n{}\nSpelare:\n{}\nSenaste händelser:\n{}\n\nTillåtna handlingar: {}\nFallback om du är osäker: {}\nSvara endast JSON på en rad med action satt till en av de tillåtna handlingarna.",
+            settings.ai_turn_prompt,
+            player.name,
+            personality,
+            player.name,
+            player.cash,
+            space.name,
+            space.kind,
+            player.jailed,
+            player.jail_turns,
+            self.owned_assets_summary(player_index),
+            self.phase.as_str(),
+            self.players[self.current_selector_index()].name,
+            self.bank_message,
+            pending,
+            players,
+            self.events.join("\n"),
+            allowed_actions,
+            fallback_decision.as_str()
+        )
+    }
+
     fn select_ai_token(&mut self) {
         if self.phase != Phase::TokenSelection {
             return;
@@ -2203,6 +2494,40 @@ impl GameState {
             return true;
         }
         false
+    }
+
+    fn has_ai_liquidation_option(&self, player_index: usize) -> bool {
+        self.spaces.iter().any(|space| {
+            self.owners[space.index] == Some(player_index)
+                && (self.buildings[space.index] > 0
+                    || (!self.mortgaged[space.index] && !self.has_buildings_in_group(space.index)))
+        })
+    }
+
+    fn owned_assets_summary(&self, player_index: usize) -> String {
+        let assets = self
+            .spaces
+            .iter()
+            .filter(|space| self.owners[space.index] == Some(player_index))
+            .map(|space| {
+                let building = match self.buildings[space.index] {
+                    0 => "",
+                    1..=4 => " med hus",
+                    _ => " med hotell",
+                };
+                let mortgage = if self.mortgaged[space.index] {
+                    ", intecknad"
+                } else {
+                    ""
+                };
+                format!("{}{}{}", space.name, building, mortgage)
+            })
+            .collect::<Vec<_>>();
+        if assets.is_empty() {
+            "inget".to_string()
+        } else {
+            assets.join(", ")
+        }
     }
 
     fn first_available_token(&self) -> Option<String> {
@@ -3298,6 +3623,73 @@ impl PlayerController {
     }
 }
 
+impl AiDecision {
+    fn as_str(self) -> &'static str {
+        match self {
+            AiDecision::Buy => "buy",
+            AiDecision::Decline => "decline",
+            AiDecision::Roll => "roll",
+            AiDecision::PayJail => "pay_jail",
+            AiDecision::Liquidate => "liquidate",
+            AiDecision::Bankrupt => "bankrupt",
+            AiDecision::Wait => "wait",
+        }
+    }
+
+    fn from_action(value: &str) -> Option<Self> {
+        match normalize_lookup(value).as_str() {
+            "buy" | "kop" | "kopa" | "purchase" => Some(AiDecision::Buy),
+            "decline" | "avsta" | "skip" | "auktion" => Some(AiDecision::Decline),
+            "roll" | "sla" | "tarning" => Some(AiDecision::Roll),
+            "payjail" | "payjailfine" | "betalafangelse" | "fangelse" => Some(AiDecision::PayJail),
+            "liquidate" | "sell" | "mortgage" | "pant" | "salj" | "salja" => {
+                Some(AiDecision::Liquidate)
+            }
+            "bankrupt" | "konkurs" => Some(AiDecision::Bankrupt),
+            "wait" | "vanta" => Some(AiDecision::Wait),
+            _ => None,
+        }
+    }
+
+    fn from_llm_answer(answer: &str) -> Option<Self> {
+        if let Some(action) = json_string_field(answer, "action") {
+            if let Some(decision) = Self::from_action(&action) {
+                return Some(decision);
+            }
+        }
+        let normalized = normalize_lookup(answer);
+        for (needle, decision) in [
+            ("payjail", AiDecision::PayJail),
+            ("betalafangelse", AiDecision::PayJail),
+            ("liquidate", AiDecision::Liquidate),
+            ("mortgage", AiDecision::Liquidate),
+            ("bankrupt", AiDecision::Bankrupt),
+            ("konkurs", AiDecision::Bankrupt),
+            ("decline", AiDecision::Decline),
+            ("avsta", AiDecision::Decline),
+            ("buy", AiDecision::Buy),
+            ("kop", AiDecision::Buy),
+            ("roll", AiDecision::Roll),
+            ("sla", AiDecision::Roll),
+            ("wait", AiDecision::Wait),
+            ("vanta", AiDecision::Wait),
+        ] {
+            if normalized.contains(needle) {
+                return Some(decision);
+            }
+        }
+        None
+    }
+
+    fn constrained_for_fallback(self, fallback: AiDecision) -> Self {
+        if self == AiDecision::Wait {
+            fallback
+        } else {
+            self
+        }
+    }
+}
+
 fn read_body(reader: &mut BufReader<TcpStream>, headers: &[String]) -> std::io::Result<String> {
     let content_length = headers
         .iter()
@@ -3458,6 +3850,8 @@ fn call_ollama_generate(url: &str, model: &str, prompt: &str) -> std::io::Result
         escape_json(prompt)
     );
     let mut stream = TcpStream::connect((host.as_str(), port))?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(25)))?;
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
     let request = format!(
         "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.as_bytes().len()
@@ -3734,6 +4128,12 @@ fn load_settings() -> Settings {
     if let Some(preprompt) = toml_multiline_value(&toml, "preprompt") {
         settings.preprompt = preprompt.trim().to_string();
     }
+    if let Some(ai_turn_prompt) = toml_multiline_value(&toml, "turn_prompt") {
+        settings.ai_turn_prompt = ai_turn_prompt.trim().to_string();
+    }
+    if let Some(ai_profiles_toml) = toml_literal_multiline_value(&toml, "profiles_toml") {
+        settings.ai_profiles_toml = ai_profiles_toml.trim().to_string();
+    }
     settings
 }
 
@@ -3786,12 +4186,24 @@ fn toml_multiline_value(toml: &str, key: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+fn toml_literal_multiline_value(toml: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key} = '''");
+    let start = toml.find(&prefix)? + prefix.len();
+    let rest = &toml[start..];
+    let end = rest.find("'''")?;
+    Some(rest[..end].to_string())
+}
+
 fn escape_toml_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn escape_toml_multiline(value: &str) -> String {
     value.replace("\"\"\"", "\\\"\\\"\\\"")
+}
+
+fn escape_toml_literal_multiline(value: &str) -> String {
+    value.replace("'''", "")
 }
 
 fn token_label(token: &str) -> &'static str {
@@ -3825,6 +4237,50 @@ fn parse_ai_names(names: &str) -> Vec<String> {
         .map(clean_player_name)
         .filter(|name| !name.is_empty())
         .collect()
+}
+
+fn ai_personality_for_player(player_name: &str, profiles_toml: &str) -> Option<String> {
+    let target = normalize_lookup(player_name);
+    for block in profile_toml_blocks(profiles_toml) {
+        let Some(name) = toml_string_value(&block, "name") else {
+            continue;
+        };
+        if normalize_lookup(&name) != target {
+            continue;
+        }
+        if let Some(prompt) = toml_multiline_value(&block, "prompt")
+            .or_else(|| toml_multiline_value(&block, "personality"))
+            .or_else(|| toml_string_value(&block, "prompt"))
+            .or_else(|| toml_string_value(&block, "personality"))
+        {
+            let prompt = prompt.trim().to_string();
+            if !prompt.is_empty() {
+                return Some(prompt);
+            }
+        }
+    }
+    None
+}
+
+fn profile_toml_blocks(toml: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut current = Vec::new();
+    for line in toml.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[[profile]]" || trimmed == "[[ai_player]]" || trimmed == "[[ai_players]]" {
+            if !current.is_empty() {
+                blocks.push(current.join("\n"));
+                current.clear();
+            }
+        }
+        if !trimmed.is_empty() {
+            current.push(line.to_string());
+        }
+    }
+    if !current.is_empty() {
+        blocks.push(current.join("\n"));
+    }
+    blocks
 }
 
 fn default_ai_name(index: usize) -> String {
@@ -4086,6 +4542,37 @@ mod tests {
         assert_eq!(game.players[2].name, "Rut");
         assert_eq!(game.players[3].name, "Bosse");
         assert!(game.bank_message.contains("2 AI-spelare"));
+    }
+
+    #[test]
+    fn ai_profile_toml_matches_player_name() {
+        let profile = ai_personality_for_player(
+            "Bosse",
+            r#"
+[[profile]]
+name = "Rut"
+prompt = """
+Försiktig.
+"""
+
+[[profile]]
+name = "Bosse"
+prompt = """
+Offensiv och bytesglad.
+"""
+"#,
+        )
+        .unwrap();
+
+        assert!(profile.contains("Offensiv"));
+    }
+
+    #[test]
+    fn ai_decision_parses_llm_json_answer() {
+        let decision =
+            AiDecision::from_llm_answer(r#"{"action":"pay_jail","reason":"dyrt att vänta"}"#);
+
+        assert!(decision == Some(AiDecision::PayJail));
     }
 
     #[test]

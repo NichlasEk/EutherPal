@@ -315,15 +315,20 @@ async function renderSettings() {
   const settings = await fetchSettings();
   const modelSelect = document.getElementById("model-select");
   const prepromptInput = document.getElementById("preprompt-input");
+  const aiTurnPromptInput = document.getElementById("ai-turn-prompt-input");
+  const aiProfilesInput = document.getElementById("ai-profiles-input");
   const status = document.getElementById("settings-status");
   const path = document.getElementById("settings-path");
 
+  if (!modelSelect || !prepromptInput || !status) return;
   modelSelect.value = [...modelSelect.options].some((option) => option.value === settings.model)
     ? settings.model
     : "custom";
   prepromptInput.value = settings.preprompt;
+  if (aiTurnPromptInput) aiTurnPromptInput.value = settings.aiTurnPrompt || "";
+  if (aiProfilesInput) aiProfilesInput.value = settings.aiProfilesToml || "";
   status.textContent = `Laddat från ${settings.path}`;
-  path.textContent = settings.path;
+  if (path) path.textContent = settings.path;
 
   document.getElementById("settings-form").onsubmit = async (event) => {
     event.preventDefault();
@@ -331,6 +336,8 @@ async function renderSettings() {
     const body = new URLSearchParams({
       model: modelSelect.value,
       preprompt: prepromptInput.value,
+      aiTurnPrompt: aiTurnPromptInput?.value || "",
+      aiProfilesToml: aiProfilesInput?.value || "",
     });
     const updated = await postAction("/api/settings", body.toString());
     status.textContent = `Sparat till ${updated.path}`;
