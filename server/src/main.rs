@@ -30,6 +30,8 @@ const GAME_STATE_PATH: &str = "data/game-state.json";
 const BANK_RULES_PATH: &str = "rules/bank.rules.toml";
 const DEFAULT_MODEL: &str = "supergemma";
 const DEFAULT_EUTHEROXIDE_APP_LOGIN_URL: &str = "http://127.0.0.1:8080/api/app/login";
+const DEFAULT_EUTHERNET_AWARD_URL: &str = "http://127.0.0.1:8791/api/euthernet/eutherium/award";
+const EUTHERPAL_WIN_REWARD_EUX: i32 = 1000;
 const DEFAULT_PLAYER_COUNT: usize = 4;
 const MIN_PLAYER_COUNT: usize = 2;
 const MAX_PLAYER_COUNT: usize = 5;
@@ -179,6 +181,7 @@ struct BankChatMessage {
 }
 
 struct GameState {
+    game_id: String,
     room_code: String,
     phase: Phase,
     players: Vec<Player>,
@@ -204,6 +207,7 @@ struct GameState {
     bank_chat: Vec<BankChatMessage>,
     events: Vec<String>,
     pending_account_links: Vec<PlayerAccountLink>,
+    eutherium_award_keys: Vec<String>,
     free_parking_pot: i32,
     bank_message: String,
     bank_ai_status: String,
@@ -809,6 +813,11 @@ fn eutheroxide_app_login(username: &str, password: &str) -> Result<String, Strin
     }
 }
 
+fn euthernet_award_url() -> String {
+    env::var("EUTHERPAL_EUTHERNET_AWARD_URL")
+        .unwrap_or_else(|_| DEFAULT_EUTHERNET_AWARD_URL.to_string())
+}
+
 struct HttpJsonResponse {
     status_ok: bool,
     body: String,
@@ -893,6 +902,7 @@ impl GameState {
         let rng_state = seed_rng(player_count as u64);
 
         Self {
+            game_id: format!("PAL-{}", now_millis()),
             room_code: "PAL-001".to_string(),
             phase: Phase::TokenSelection,
             players,
@@ -922,6 +932,7 @@ impl GameState {
             }],
             events: vec![format!("{first_name} börjar och väljer pjäs först.")],
             pending_account_links: Vec::new(),
+            eutherium_award_keys: Vec::new(),
             free_parking_pot: 0,
             bank_message: format!(
                 "{first_name} börjar och väljer pjäs först. Välj en av de fem klassiska pjäserna."
@@ -1097,7 +1108,7 @@ impl GameState {
     fn to_snapshot(&self) -> String {
         let mut lines = Vec::new();
         lines.push(format!(
-            "meta\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "meta\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.room_code,
             self.phase.as_str(),
             self.selection_cursor,
@@ -1105,7 +1116,8 @@ impl GameState {
             self.dice[0],
             self.dice[1],
             snapshot_escape(&self.bank_message),
-            self.stopped
+            self.stopped,
+            snapshot_escape(&self.game_id)
         ));
         lines.push(format!(
             "selection\t{}",
@@ -1120,6 +1132,14 @@ impl GameState {
             self.next_chance, self.next_community
         ));
         lines.push(format!("pot\t{}", self.free_parking_pot));
+        lines.push(format!(
+            "eutherium_awards\t{}",
+            self.eutherium_award_keys
+                .iter()
+                .map(|key| snapshot_escape(key))
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
         lines.push(format!("proposal_next\t{}", self.next_bank_proposal_id));
         for proposal in &self.bank_proposals {
             lines.push(format!(
@@ -1216,6 +1236,11 @@ impl GameState {
                     game.dice = [parts[5].parse().ok()?, parts[6].parse().ok()?];
                     game.bank_message = snapshot_unescape(parts[7]);
                     game.stopped = parts.get(8).map(|value| parse_bool(value)).unwrap_or(false);
+                    game.game_id = parts
+                        .get(9)
+                        .map(|value| snapshot_unescape(value))
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or_else(|| format!("PAL-{}", now_millis()));
                 }
                 "selection" if parts.len() >= 2 => {
                     game.selection_order = parts[1]
@@ -1232,6 +1257,13 @@ impl GameState {
                 }
                 "pot" if parts.len() >= 2 => {
                     game.free_parking_pot = parts[1].parse().ok()?;
+                }
+                "eutherium_awards" if parts.len() >= 2 => {
+                    game.eutherium_award_keys = parts[1]
+                        .split(',')
+                        .map(snapshot_unescape)
+                        .filter(|value| !value.is_empty())
+                        .collect();
                 }
                 "proposal_next" if parts.len() >= 2 => {
                     game.next_bank_proposal_id = parts[1].parse().ok()?;
@@ -2152,6 +2184,9 @@ impl GameState {
             "{name} gick i konkurs. Fastigheterna återgår till banken."
         ));
         self.bank_message = format!("{name} är i konkurs och är ute ur spelet.");
+        if self.finish_game_if_one_active() {
+            return;
+        }
         if self.current_player_index == player_index {
             self.advance_to_next_active_player();
         }
@@ -2192,9 +2227,6 @@ impl GameState {
         self.bank_proposals.retain(|proposal| {
             proposal.requester_index != player_index && proposal.counterparty_index != player_index
         });
-        if self.current_player_index == player_index {
-            self.advance_to_next_active_player();
-        }
 
         let asset_text = if transferred.is_empty() {
             "inga fastigheter".to_string()
@@ -2209,28 +2241,113 @@ impl GameState {
         self.push_event(format!(
             "{player_name} gick ur spelet och gav {asset_text}{cash_text} till {recipient_name}."
         ));
-        format!(
+        let message = format!(
             "{player_name} går ur spelet. {recipient_name} tar över {asset_text}{cash_text}. Det här är frivilligt utträde, inte vanlig konkurs."
-        )
+        );
+        self.bank_message = message.clone();
+        if !self.finish_game_if_one_active() && self.current_player_index == player_index {
+            self.advance_to_next_active_player();
+        }
+        message
     }
 
     fn advance_to_next_active_player(&mut self) {
-        if self
-            .players
-            .iter()
-            .filter(|player| !player.bankrupt)
-            .count()
-            <= 1
-        {
-            if let Some(winner) = self.players.iter().find(|player| !player.bankrupt) {
-                self.bank_message = format!("{} vinner spelet!", winner.name);
-            }
+        if self.finish_game_if_one_active() {
             return;
         }
         for _ in 0..self.players.len() {
             self.current_player_index = (self.current_player_index + 1) % self.players.len();
             if !self.players[self.current_player_index].bankrupt {
                 return;
+            }
+        }
+    }
+
+    fn finish_game_if_one_active(&mut self) -> bool {
+        let active = self
+            .players
+            .iter()
+            .enumerate()
+            .filter(|(_, player)| !player.bankrupt)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if active.len() > 1 || self.phase == Phase::TokenSelection {
+            return false;
+        }
+        let Some(winner_index) = active.first().copied() else {
+            return true;
+        };
+        let winner_name = self.players[winner_index].name.clone();
+        let reward_message = self.award_winner_eutherium(winner_index);
+        self.bank_message = format!("{winner_name} vinner spelet!{reward_message}");
+        let win_event = format!("{winner_name} vinner spelet.");
+        if !self.events.iter().any(|event| event == &win_event) {
+            self.push_event(win_event);
+        }
+        true
+    }
+
+    fn winner_eutherium_award_payload(&self, winner_index: usize) -> Option<(String, String)> {
+        let winner = self.players.get(winner_index)?;
+        if winner.controller != PlayerController::Human {
+            return None;
+        }
+        let account_user = winner.account_user.as_deref()?;
+        let key = format!("{}-{}-win", self.game_id, account_user);
+        let reason = format!("EutherPål vinst i rum {} ({})", self.room_code, winner.name);
+        let body = format!(
+            "{{\"user\":\"{}\",\"amount\":{},\"reason\":\"{}\",\"source\":\"eutherpal\",\"createdBy\":\"eutherpal\",\"idempotencyKey\":\"{}\"}}",
+            escape_json(account_user),
+            EUTHERPAL_WIN_REWARD_EUX,
+            escape_json(&reason),
+            escape_json(&key)
+        );
+        Some((key, body))
+    }
+
+    fn award_winner_eutherium(&mut self, winner_index: usize) -> String {
+        let winner = &self.players[winner_index];
+        if winner.controller != PlayerController::Human {
+            return " AI-spelare får ingen Eutherium-belöning.".to_string();
+        }
+        let Some(account_user) = winner.account_user.clone() else {
+            return " Ingen Eutherium-belöning betalades eftersom vinnaren inte har kopplat Eutherium-konto.".to_string();
+        };
+        let Some((key, body)) = self.winner_eutherium_award_payload(winner_index) else {
+            return String::new();
+        };
+        if self.eutherium_award_keys.iter().any(|seen| seen == &key) {
+            return format!(
+                " Eutherium-vinsten på {} EUX är redan registrerad för {account_user}.",
+                EUTHERPAL_WIN_REWARD_EUX
+            );
+        }
+        match http_post_json(&euthernet_award_url(), &body) {
+            Ok(response) if response.status_ok => {
+                self.eutherium_award_keys.push(key);
+                self.push_event(format!(
+                    "{account_user} fick {} EUX för vinsten i EutherPål.",
+                    EUTHERPAL_WIN_REWARD_EUX
+                ));
+                format!(
+                    " {account_user} får {} EUX för vinsten.",
+                    EUTHERPAL_WIN_REWARD_EUX
+                )
+            }
+            Ok(response) => {
+                self.push_event(format!(
+                    "Eutherium-belöning till {account_user} kunde inte betalas."
+                ));
+                format!(
+                    " Eutherium-belöningen kunde inte betalas just nu: {}",
+                    response.body.trim()
+                )
+            }
+            Err(error) => {
+                self.push_event(format!(
+                    "Eutherium-belöning till {account_user} kunde inte nå EutherNet."
+                ));
+                format!(" Eutherium-belöningen kunde inte nå EutherNet: {error}")
             }
         }
     }
@@ -5560,6 +5677,46 @@ Offensiv och bytesglad.
         assert!(json.contains("\"propertyCount\":2"));
         assert!(json.contains("Karin gick i konkurs"));
         assert!(json.contains("\"name\":\"Karin\""));
+    }
+
+    #[test]
+    fn eutherium_winner_payload_requires_human_account() {
+        let mut game = playable_game();
+        game.game_id = "PAL-test".to_string();
+        game.room_code = "PAL-999".to_string();
+        game.players[0].name = "Anna".to_string();
+
+        assert!(game.winner_eutherium_award_payload(0).is_none());
+
+        game.players[0].account_user = Some("nichlas".to_string());
+        let (key, body) = game
+            .winner_eutherium_award_payload(0)
+            .expect("human account should be rewardable");
+        assert_eq!(key, "PAL-test-nichlas-win");
+        assert!(body.contains("\"user\":\"nichlas\""));
+        assert!(body.contains("\"amount\":1000"));
+        assert!(body.contains("\"source\":\"eutherpal\""));
+        assert!(body.contains("EutherPål vinst i rum PAL-999"));
+
+        game.players[0].controller = PlayerController::Ai;
+        assert!(game.winner_eutherium_award_payload(0).is_none());
+    }
+
+    #[test]
+    fn snapshot_roundtrip_preserves_eutherium_award_keys() {
+        let mut game = playable_game();
+        game.game_id = "PAL-persist".to_string();
+        game.eutherium_award_keys
+            .push("PAL-persist-nichlas-win".to_string());
+
+        let snapshot = game.to_snapshot();
+        let loaded = GameState::from_snapshot(&snapshot).expect("snapshot should load");
+
+        assert_eq!(loaded.game_id, "PAL-persist");
+        assert_eq!(
+            loaded.eutherium_award_keys,
+            vec!["PAL-persist-nichlas-win".to_string()]
+        );
     }
 
     #[test]
