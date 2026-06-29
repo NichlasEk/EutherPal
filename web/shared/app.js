@@ -98,6 +98,7 @@ function renderTv(state) {
     state.phase === "token_selection" ? "Pjäsval" : `Tärning: ${state.dice.join(" + ")}`;
   document.getElementById("bank-message").textContent = state.bankMessage;
   renderAiTurnThought(state);
+  renderGameOverScreen(state);
   renderTvAuction(state);
   renderFreeParkingPot(state.freeParkingPot || 0);
 
@@ -134,13 +135,63 @@ function renderAiTurnThought(state) {
   const panel = document.getElementById("ai-turn-thought");
   if (!panel) return;
   const source = state.stopped ? "Stoppad" : state.aiTurnSource;
-  const thought = state.stopped
+  const latestBankLine = latestBankChatLine(state);
+  let thought = state.stopped
     ? "Spelet är stoppat av admin."
     : (state.aiTurnThought || "");
+  if (!thought && latestBankLine) {
+    thought = latestBankLine.text;
+  }
+  const label = thought === latestBankLine?.text ? latestBankLine.speaker : (source || "AI");
   panel.hidden = !thought;
   panel.innerHTML = thought
-    ? `<strong>${escapeHtml(source || "AI")}</strong><span>${escapeHtml(thought)}</span>`
+    ? `<strong>${escapeHtml(label)}</strong><span>${escapeHtml(thought)}</span>`
     : "";
+}
+
+function latestBankChatLine(state) {
+  const lines = state.bankChat || [];
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (line?.fromBank && line.text) return line;
+  }
+  return null;
+}
+
+function renderGameOverScreen(state) {
+  const panel = document.getElementById("game-over-screen");
+  if (!panel) return;
+  const gameOver = state.gameOver;
+  panel.hidden = !gameOver;
+  if (!gameOver) {
+    panel.innerHTML = "";
+    return;
+  }
+  const story = (gameOver.story || [])
+    .map((line) => `<li>${escapeHtml(line)}</li>`)
+    .join("");
+  const players = (gameOver.players || [])
+    .slice()
+    .sort((a, b) => Number(b.netWorth || 0) - Number(a.netWorth || 0))
+    .map((player) => `<tr><td>${escapeHtml(player.name)}${player.bankrupt ? " · konkurs" : ""}</td><td>${Number(player.cash || 0)} kr</td><td>${Number(player.properties || 0)}</td><td>${Number(player.netWorth || 0)} kr</td></tr>`)
+    .join("");
+  panel.innerHTML = `
+    <div class="game-over-card">
+      <p class="eyebrow">Spelet är avgjort</p>
+      <h2>${escapeHtml(gameOver.winner)} vann</h2>
+      <p>${escapeHtml(gameOver.summary || "")}</p>
+      <div class="winner-stats">
+        <span><strong>${Number(gameOver.winnerCash || 0)}</strong> kr</span>
+        <span><strong>${Number(gameOver.propertyCount || 0)}</strong> fastigheter</span>
+        <span><strong>${Number(gameOver.buildingCount || 0)}</strong> hus</span>
+        <span><strong>${Number(gameOver.hotelCount || 0)}</strong> hotell</span>
+      </div>
+      ${story ? `<ol class="game-over-story">${story}</ol>` : ""}
+      <table class="game-over-table">
+        <thead><tr><th>Spelare</th><th>Pengar</th><th>Fast.</th><th>Värde</th></tr></thead>
+        <tbody>${players}</tbody>
+      </table>
+    </div>`;
 }
 
 function tileContent(space, players, position) {

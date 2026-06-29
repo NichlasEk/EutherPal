@@ -178,6 +178,98 @@ textarea {
   line-height: 1.2;
 }
 
+.game-over-screen {
+  position: absolute;
+  inset: 5.5%;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(29, 32, 33, 0.78);
+  backdrop-filter: blur(2px);
+}
+
+.game-over-screen[hidden] {
+  display: none;
+}
+
+.game-over-card {
+  width: min(760px, 92%);
+  max-height: 92%;
+  overflow: hidden;
+  padding: 24px;
+  border: 3px solid var(--yellow);
+  border-radius: 8px;
+  background: rgba(40, 40, 40, 0.96);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.36);
+  color: var(--ink);
+  text-align: center;
+}
+
+.game-over-card h2 {
+  margin: 4px 0 8px;
+  color: var(--cream);
+  font-size: clamp(2.1rem, 4vw, 4rem);
+  line-height: 0.96;
+}
+
+.game-over-card p {
+  margin: 0 auto 14px;
+  max-width: 48ch;
+  color: var(--muted);
+}
+
+.winner-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.winner-stats span {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(80, 73, 69, 0.72);
+  color: var(--muted);
+}
+
+.winner-stats strong {
+  display: block;
+  color: var(--yellow);
+  font-size: 1.3rem;
+}
+
+.game-over-story {
+  margin: 12px 0;
+  padding-left: 1.3rem;
+  text-align: left;
+  color: var(--cream);
+}
+
+.game-over-story li {
+  margin: 4px 0;
+}
+
+.game-over-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  text-align: left;
+}
+
+.game-over-table th,
+.game-over-table td {
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.game-over-table th {
+  color: var(--yellow);
+  text-transform: uppercase;
+  font-size: 0.7rem;
+}
+
 .room-code {
   display: grid;
   gap: 2px;
@@ -1159,6 +1251,29 @@ body[data-view="tv"] .ai-turn-thought {
 body[data-view="tv"] .ai-turn-thought span {
   font-size: 0.72rem;
   line-height: 1.12;
+}
+
+body[data-view="tv"] .game-over-screen {
+  inset: 4.5%;
+  padding: 10px;
+}
+
+body[data-view="tv"] .game-over-card {
+  width: min(720px, 94%);
+  padding: 18px;
+}
+
+body[data-view="tv"] .game-over-card h2 {
+  font-size: clamp(2rem, 3.5vw, 3.3rem);
+}
+
+body[data-view="tv"] .winner-stats {
+  gap: 6px;
+}
+
+body[data-view="tv"] .game-over-story,
+body[data-view="tv"] .game-over-table {
+  font-size: 0.78rem;
 }
 
 body[data-view="tv"] .room-code {

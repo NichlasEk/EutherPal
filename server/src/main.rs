@@ -2451,7 +2451,13 @@ impl GameState {
             format!("{} valde {}.", source, chosen.label_sv())
         };
         if reason.is_empty() {
-            format!("{player_name}: {action_text}")
+            format!(
+                "{player_name}: {action_text} Banken väger pengar, position och möjliga affärer innan turen går vidare."
+            )
+        } else if reason.contains("Ingen tydlig motivering") {
+            format!(
+                "{player_name}: {action_text} Modellen gav ett kort svar, så banken tolkar draget utifrån pengar, fastigheter och risk."
+            )
         } else {
             format!("{player_name}: {action_text} {reason}")
         }
@@ -3774,7 +3780,7 @@ impl GameState {
             .join(",");
 
         format!(
-            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"aiTurnSource\":\"{}\",\"aiTurnThought\":\"{}\",\"stopped\":{},\"dice\":[{},{}],\"freeParkingPot\":{},\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"assetActions\":[{}],\"bankProposals\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}],\"bankChat\":[{}]}}",
+            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"aiTurnSource\":\"{}\",\"aiTurnThought\":\"{}\",\"stopped\":{},\"gameOver\":{},\"dice\":[{},{}],\"freeParkingPot\":{},\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"assetActions\":[{}],\"bankProposals\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}],\"bankChat\":[{}]}}",
             escape_json(&self.room_code),
             self.phase.as_str(),
             escape_json(current),
@@ -3782,6 +3788,7 @@ impl GameState {
             escape_json(&self.ai_turn_source),
             escape_json(&self.ai_turn_thought),
             self.stopped,
+            self.game_over_json(),
             self.dice[0],
             self.dice[1],
             self.free_parking_pot,
@@ -3797,6 +3804,106 @@ impl GameState {
             events,
             bank_chat
         )
+    }
+
+    fn game_over_json(&self) -> String {
+        let active = self
+            .players
+            .iter()
+            .enumerate()
+            .filter(|(_, player)| !player.bankrupt)
+            .collect::<Vec<_>>();
+        if active.len() != 1 || self.phase == Phase::TokenSelection {
+            return "null".to_string();
+        }
+        let (winner_index, winner) = active[0];
+        let property_count = self
+            .owners
+            .iter()
+            .filter(|owner| **owner == Some(winner_index))
+            .count();
+        let building_count: u32 = self
+            .buildings
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| self.owners[*index] == Some(winner_index))
+            .map(|(_, level)| u32::from(*level).min(4))
+            .sum();
+        let hotel_count = self
+            .buildings
+            .iter()
+            .enumerate()
+            .filter(|(index, level)| self.owners[*index] == Some(winner_index) && **level >= 5)
+            .count();
+        let asset_value = self.player_asset_value(winner_index);
+        let net_worth = winner.cash + asset_value;
+        let summary = format!(
+            "{} vann med {} kr i kontanter och ett uppskattat värde på {} kr.",
+            winner.name, winner.cash, net_worth
+        );
+        let player_rows = self
+            .players
+            .iter()
+            .enumerate()
+            .map(|(index, player)| {
+                let properties = self.owners.iter().filter(|owner| **owner == Some(index)).count();
+                format!(
+                    "{{\"name\":\"{}\",\"cash\":{},\"bankrupt\":{},\"properties\":{},\"assetValue\":{},\"netWorth\":{}}}",
+                    escape_json(&player.name),
+                    player.cash,
+                    player.bankrupt,
+                    properties,
+                    self.player_asset_value(index),
+                    player.cash + self.player_asset_value(index)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let story = self
+            .events
+            .iter()
+            .rev()
+            .filter(|event| {
+                let lower = event.to_lowercase();
+                lower.contains("konkurs")
+                    || lower.contains("gick ur")
+                    || lower.contains("gav")
+                    || lower.contains("vinner")
+            })
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>();
+        let story = story
+            .iter()
+            .rev()
+            .map(|event| format!("\"{}\"", escape_json(event)))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "{{\"winner\":\"{}\",\"winnerCash\":{},\"winnerNetWorth\":{},\"propertyCount\":{},\"buildingCount\":{},\"hotelCount\":{},\"summary\":\"{}\",\"story\":[{}],\"players\":[{}]}}",
+            escape_json(&winner.name),
+            winner.cash,
+            net_worth,
+            property_count,
+            building_count,
+            hotel_count,
+            escape_json(&summary),
+            story,
+            player_rows
+        )
+    }
+
+    fn player_asset_value(&self, player_index: usize) -> i32 {
+        self.spaces
+            .iter()
+            .filter(|space| self.owners[space.index] == Some(player_index))
+            .map(|space| {
+                let property = space.price.unwrap_or(0);
+                let buildings =
+                    (self.buildings[space.index] as i32) * space.build_cost.unwrap_or(0);
+                property + buildings
+            })
+            .sum()
     }
 
     fn pending_offer_json(&self) -> String {
@@ -5245,6 +5352,28 @@ Offensiv och bytesglad.
         assert!(game.players[0].bankrupt);
         assert_eq!(game.owners[23], None);
         assert!(game.bank_message.contains("återgår till banken"));
+    }
+
+    #[test]
+    fn game_over_json_summarizes_winner_when_one_player_remains() {
+        let mut game = playable_game();
+        game.players[0].name = "Anna".to_string();
+        game.players[1].name = "Karin".to_string();
+        game.players[0].cash = 12345;
+        game.owners[1] = Some(0);
+        game.owners[3] = Some(0);
+        game.buildings[1] = 2;
+        game.players[1].bankrupt = true;
+        game.players[2].bankrupt = true;
+        game.players[3].bankrupt = true;
+        game.push_event("Karin gick i konkurs. Fastigheterna återgår till banken.".to_string());
+
+        let json = game.game_over_json();
+
+        assert!(json.contains("\"winner\":\"Anna\""));
+        assert!(json.contains("\"propertyCount\":2"));
+        assert!(json.contains("Karin gick i konkurs"));
+        assert!(json.contains("\"name\":\"Karin\""));
     }
 
     #[test]
