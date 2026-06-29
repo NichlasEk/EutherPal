@@ -1021,6 +1021,27 @@ body[data-view="mobile"] #mobile-events {
   font-weight: 800;
 }
 
+.account-login {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.account-login h2 {
+  margin: 0;
+  color: var(--cream);
+  font-size: 0.95rem;
+}
+
+.account-login p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
 .action-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

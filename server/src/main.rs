@@ -29,6 +29,7 @@ const SETTINGS_PATH: &str = "data/settings.toml";
 const GAME_STATE_PATH: &str = "data/game-state.json";
 const BANK_RULES_PATH: &str = "rules/bank.rules.toml";
 const DEFAULT_MODEL: &str = "supergemma";
+const DEFAULT_EUTHEROXIDE_APP_LOGIN_URL: &str = "http://127.0.0.1:8080/api/app/login";
 const DEFAULT_PLAYER_COUNT: usize = 4;
 const MIN_PLAYER_COUNT: usize = 2;
 const MAX_PLAYER_COUNT: usize = 5;
@@ -49,6 +50,7 @@ const TOKEN_CHOICES: &[(&str, &str)] = &[
 struct Player {
     name: String,
     controller: PlayerController,
+    account_user: Option<String>,
     cash: i32,
     position: usize,
     token: Option<String>,
@@ -201,12 +203,19 @@ struct GameState {
     ai_action_pending: bool,
     bank_chat: Vec<BankChatMessage>,
     events: Vec<String>,
+    pending_account_links: Vec<PlayerAccountLink>,
     free_parking_pot: i32,
     bank_message: String,
     bank_ai_status: String,
     ai_turn_source: String,
     ai_turn_thought: String,
     stopped: bool,
+}
+
+#[derive(Clone)]
+struct PlayerAccountLink {
+    player_name: String,
+    account_user: String,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -353,6 +362,36 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
             let mut game = game.lock().expect("game state lock");
             game.stop_game();
             json(200, &game.to_json())
+        }
+        ("POST", "/api/account/login") => {
+            let player = form_value(&body, "player")
+                .or_else(|| query_value(query, "player"))
+                .unwrap_or_default();
+            let username = form_value(&body, "username")
+                .or_else(|| query_value(query, "username"))
+                .unwrap_or_default();
+            let password = form_value(&body, "password")
+                .or_else(|| query_value(query, "password"))
+                .unwrap_or_default();
+            match eutheroxide_app_login(&username, &password) {
+                Ok(account_user) => {
+                    let mut game = game.lock().expect("game state lock");
+                    let message = game.link_account_for_player_name(&player, &account_user);
+                    json(
+                        200,
+                        &format!(
+                            "{{\"ok\":true,\"user\":\"{}\",\"message\":\"{}\",\"game\":{}}}",
+                            escape_json(&account_user),
+                            escape_json(&message),
+                            game.to_json()
+                        ),
+                    )
+                }
+                Err(error) => json(
+                    401,
+                    &format!("{{\"ok\":false,\"error\":\"{}\"}}", escape_json(&error)),
+                ),
+            }
         }
         ("POST", "/api/game/admin-adjust") => {
             let player = form_value(&body, "player")
@@ -745,6 +784,65 @@ fn llm_ai_decision_for_prompt(prompt: &str) -> Result<AiTurnAnswer, String> {
         .ok_or_else(|| "LLM gav inget giltigt AI-drag".to_string())
 }
 
+fn eutheroxide_app_login(username: &str, password: &str) -> Result<String, String> {
+    let username = clean_account_user(username);
+    if username.is_empty() || password.is_empty() {
+        return Err("Ange Eutherium-användare och lösenord.".to_string());
+    }
+    let url = env::var("EUTHERPAL_EUTHEROXIDE_APP_LOGIN_URL")
+        .unwrap_or_else(|_| DEFAULT_EUTHEROXIDE_APP_LOGIN_URL.to_string());
+    let body = format!(
+        "{{\"username\":\"{}\",\"password\":\"{}\"}}",
+        escape_json(&username),
+        escape_json(password)
+    );
+    let response = http_post_json(&url, &body).map_err(|error| error.to_string())?;
+    if !response.status_ok {
+        return Err("Eutherium-login nekades.".to_string());
+    }
+    let user = json_string_field(&response.body, "user").unwrap_or_default();
+    let user = clean_account_user(&user);
+    if user.is_empty() {
+        Err("EutherOxide svarade utan användarnamn.".to_string())
+    } else {
+        Ok(user)
+    }
+}
+
+struct HttpJsonResponse {
+    status_ok: bool,
+    body: String,
+}
+
+fn http_post_json(url: &str, body: &str) -> std::io::Result<HttpJsonResponse> {
+    let (host, port, path) = parse_http_url(url).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "bara http:// stöds")
+    })?;
+    let mut stream = TcpStream::connect((host.as_str(), port))?;
+    stream.set_read_timeout(Some(Duration::from_secs(8)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.as_bytes().len()
+    );
+    stream.write_all(request.as_bytes())?;
+    stream.flush()?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    let (headers, body) = response.split_once("\r\n\r\n").ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "ogiltigt HTTP-svar")
+    })?;
+    let status_ok = headers
+        .lines()
+        .next()
+        .map(|line| line.contains(" 200 ") || line.contains(" 201 "))
+        .unwrap_or(false);
+    Ok(HttpJsonResponse {
+        status_ok,
+        body: body.to_string(),
+    })
+}
+
 fn health_json(game: &GameState) -> String {
     let settings = load_settings();
     let model = llm_model_name(&settings);
@@ -823,6 +921,7 @@ impl GameState {
                 from_bank: true,
             }],
             events: vec![format!("{first_name} börjar och väljer pjäs först.")],
+            pending_account_links: Vec::new(),
             free_parking_pot: 0,
             bank_message: format!(
                 "{first_name} börjar och väljer pjäs först. Välj en av de fem klassiska pjäserna."
@@ -1059,7 +1158,7 @@ impl GameState {
         }
         for player in &self.players {
             lines.push(format!(
-                "player\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "player\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 snapshot_escape(&player.name),
                 player.cash,
                 player.position,
@@ -1067,7 +1166,8 @@ impl GameState {
                 player.jailed,
                 player.jail_turns,
                 player.bankrupt,
-                player.controller.as_str()
+                player.controller.as_str(),
+                snapshot_escape(player.account_user.as_deref().unwrap_or(""))
             ));
         }
         for index in 0..self.spaces.len() {
@@ -1192,6 +1292,10 @@ impl GameState {
                         .get(8)
                         .map(|value| PlayerController::from_str(value))
                         .unwrap_or(PlayerController::Human);
+                    game.players[player_index].account_user = parts
+                        .get(9)
+                        .map(|value| snapshot_unescape(value))
+                        .filter(|value| !value.is_empty());
                     player_index += 1;
                 }
                 "asset" if parts.len() >= 5 => {
@@ -1260,6 +1364,9 @@ impl GameState {
 
         self.players[player_index].name = chosen_name;
         let player_name = self.players[player_index].name.clone();
+        if self.players[player_index].controller == PlayerController::Human {
+            self.players[player_index].account_user = self.take_pending_account_link(&player_name);
+        }
         let token_label = token_label(token);
         self.players[player_index].token = Some(token.to_string());
         self.selection_cursor += 1;
@@ -1279,6 +1386,49 @@ impl GameState {
                 self.players[next].name
             );
         }
+    }
+
+    fn link_account_for_player_name(&mut self, player_name: &str, account_user: &str) -> String {
+        let player_name = clean_player_name(player_name);
+        let account_user = clean_account_user(account_user);
+        if player_name.is_empty() {
+            return "Skriv ditt spelarnamn innan du kopplar Eutherium-konto.".to_string();
+        }
+        if account_user.is_empty() {
+            return "Eutherium-kontot kunde inte verifieras.".to_string();
+        }
+        if let Some(player) = self
+            .players
+            .iter_mut()
+            .find(|player| player.name == player_name)
+        {
+            if player.controller == PlayerController::Ai {
+                return "AI-spelare kan inte kopplas till Eutherium-belöning.".to_string();
+            }
+            player.account_user = Some(account_user.clone());
+            self.bank_message =
+                format!("{player_name} är kopplad till Eutherium-konto {account_user}.");
+            self.push_event(format!("{player_name} kopplade Eutherium-konto."));
+            return self.bank_message.clone();
+        }
+        self.pending_account_links
+            .retain(|link| link.player_name != player_name);
+        self.pending_account_links.push(PlayerAccountLink {
+            player_name: player_name.clone(),
+            account_user: account_user.clone(),
+        });
+        self.bank_message = format!(
+            "{player_name} är inloggad som {account_user}. Kontot kopplas när pjäsen väljs."
+        );
+        self.bank_message.clone()
+    }
+
+    fn take_pending_account_link(&mut self, player_name: &str) -> Option<String> {
+        let index = self
+            .pending_account_links
+            .iter()
+            .position(|link| link.player_name == player_name)?;
+        Some(self.pending_account_links.remove(index).account_user)
     }
 
     fn roll_current_player(&mut self, player_name: &str) {
@@ -3694,9 +3844,10 @@ impl GameState {
             .iter()
             .map(|player| {
                 format!(
-                    "{{\"name\":\"{}\",\"controller\":\"{}\",\"cash\":{},\"position\":{},\"token\":{},\"jailed\":{},\"jailTurns\":{},\"bankrupt\":{}}}",
+                    "{{\"name\":\"{}\",\"controller\":\"{}\",\"accountUser\":{},\"cash\":{},\"position\":{},\"token\":{},\"jailed\":{},\"jailTurns\":{},\"bankrupt\":{}}}",
                     escape_json(&player.name),
                     player.controller.as_str(),
+                    optional_json_string(player.account_user.as_deref()),
                     player.cash,
                     player.position,
                     optional_json_string(player.token.as_deref()),
@@ -3850,8 +4001,11 @@ impl GameState {
             .map(|(index, player)| {
                 let properties = self.owners.iter().filter(|owner| **owner == Some(index)).count();
                 format!(
-                    "{{\"name\":\"{}\",\"cash\":{},\"bankrupt\":{},\"properties\":{},\"assetValue\":{},\"netWorth\":{}}}",
+                    "{{\"name\":\"{}\",\"controller\":\"{}\",\"accountUser\":{},\"rewardEligible\":{},\"cash\":{},\"bankrupt\":{},\"properties\":{},\"assetValue\":{},\"netWorth\":{}}}",
                     escape_json(&player.name),
+                    player.controller.as_str(),
+                    optional_json_string(player.account_user.as_deref()),
+                    player.controller == PlayerController::Human && player.account_user.is_some(),
                     player.cash,
                     player.bankrupt,
                     properties,
@@ -3882,8 +4036,10 @@ impl GameState {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "{{\"winner\":\"{}\",\"winnerCash\":{},\"winnerNetWorth\":{},\"propertyCount\":{},\"buildingCount\":{},\"hotelCount\":{},\"summary\":\"{}\",\"story\":[{}],\"players\":[{}]}}",
+            "{{\"winner\":\"{}\",\"winnerAccountUser\":{},\"rewardEligible\":{},\"winnerCash\":{},\"winnerNetWorth\":{},\"propertyCount\":{},\"buildingCount\":{},\"hotelCount\":{},\"summary\":\"{}\",\"story\":[{}],\"players\":[{}]}}",
             escape_json(&winner.name),
+            optional_json_string(winner.account_user.as_deref()),
+            winner.controller == PlayerController::Human && winner.account_user.is_some(),
             winner.cash,
             net_worth,
             property_count,
@@ -4111,6 +4267,7 @@ impl Player {
         Self {
             name: name.to_string(),
             controller: PlayerController::Human,
+            account_user: None,
             cash: 15000,
             position: 0,
             token: None,
@@ -4803,6 +4960,17 @@ fn clean_player_name(name: &str) -> String {
         .collect()
 }
 
+fn clean_account_user(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+        })
+        .take(48)
+        .collect()
+}
+
 fn clean_chat_message(message: &str) -> String {
     message
         .trim()
@@ -5132,6 +5300,22 @@ mod tests {
         assert_eq!(game.players[2].name, "Rut");
         assert_eq!(game.players[3].name, "Bosse");
         assert!(game.bank_message.contains("2 AI-spelare"));
+    }
+
+    #[test]
+    fn pending_account_link_attaches_when_human_selects_token() {
+        let mut game = GameState::new_with_player_count(2);
+        let selector = game.selection_order[0];
+
+        let message = game.link_account_for_player_name("Anna", "anna.server");
+        assert!(message.contains("Kontot kopplas"));
+
+        game.select_token("bil", "Anna");
+
+        assert_eq!(
+            game.players[selector].account_user.as_deref(),
+            Some("anna.server")
+        );
     }
 
     #[test]

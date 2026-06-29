@@ -316,6 +316,7 @@ function renderMobile(state) {
     saveLocalPlayer(document.getElementById("player-name-input").value);
     renderMobile(state);
   };
+  bindAccountLogin(state);
 
   renderPlayerSummary(state, local);
   renderTokenButtons(state);
@@ -991,6 +992,7 @@ function disableMobileActionButtons(disabled) {
 function renderPlayerSummary(state, localPlayer) {
   const summary = document.getElementById("player-summary");
   if (!summary) return;
+  renderAccountStatus(localPlayer);
   const name = localPlayerName();
   if (!name) {
     summary.innerHTML = `<strong>Ingen spelare vald</strong><span>Skriv ditt namn innan du tar pjäs.</span>`;
@@ -1001,7 +1003,82 @@ function renderPlayerSummary(state, localPlayer) {
     return;
   }
   const space = state.spaces[localPlayer.position];
-  summary.innerHTML = `${tokenAvatar(localPlayer, "large")}<div><strong>${escapeHtml(localPlayer.name)}${localPlayer.controller === "ai" ? " · AI" : ""}</strong><span>${tokenLabel(localPlayer.token) || "Ingen pjäs"} · ${space?.name || "Okänd ruta"} · ${localPlayer.cash} kr${localPlayer.jailed ? " · Fängslad" : ""}${localPlayer.bankrupt ? " · Konkurs" : ""}</span></div>`;
+  const account = localPlayer.accountUser ? ` · Eutherium: ${escapeHtml(localPlayer.accountUser)}` : "";
+  summary.innerHTML = `${tokenAvatar(localPlayer, "large")}<div><strong>${escapeHtml(localPlayer.name)}${localPlayer.controller === "ai" ? " · AI" : ""}</strong><span>${tokenLabel(localPlayer.token) || "Ingen pjäs"} · ${space?.name || "Okänd ruta"} · ${localPlayer.cash} kr${localPlayer.jailed ? " · Fängslad" : ""}${localPlayer.bankrupt ? " · Konkurs" : ""}${account}</span></div>`;
+}
+
+function bindAccountLogin(state) {
+  const loginButton = document.getElementById("account-login-button");
+  const logoutButton = document.getElementById("account-logout-button");
+  const userInput = document.getElementById("account-user-input");
+  const passwordInput = document.getElementById("account-password-input");
+  if (!loginButton || !logoutButton || !userInput || !passwordInput) return;
+  if (!userInput.value) userInput.value = localStorage.getItem("eutherpal.accountUser") || "";
+  loginButton.onclick = async (event) => {
+    const player = localPlayerName();
+    const username = cleanAccountUser(userInput.value);
+    const password = passwordInput.value || "";
+    if (!player || !username || !password) {
+      setAccountStatus("Skriv spelarnamn, serveranvändare och lösenord.");
+      return;
+    }
+    event.currentTarget.disabled = true;
+    setAccountStatus("Loggar in...");
+    try {
+      const result = await postAccountLogin(new URLSearchParams({ player, username, password }).toString());
+      localStorage.setItem("eutherpal.accountUser", result.user);
+      passwordInput.value = "";
+      setAccountStatus(result.message || `Inloggad som ${result.user}.`);
+      if (result.game) {
+        renderMobile(result.game);
+        renderMobileAdminIfVisible(result.game);
+      } else {
+        renderMobile(await fetchState());
+      }
+    } catch (error) {
+      setAccountStatus(error.message || "Login misslyckades.");
+    } finally {
+      event.currentTarget.disabled = false;
+    }
+  };
+  logoutButton.onclick = () => {
+    localStorage.removeItem("eutherpal.accountUser");
+    userInput.value = "";
+    passwordInput.value = "";
+    setAccountStatus("Kontot är glömt på den här telefonen. Spelets koppling ändras inte.");
+  };
+  renderAccountStatus(state.players.find((player) => player.name === localPlayerName()));
+}
+
+async function postAccountLogin(body) {
+  const response = await fetch("/api/account/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result.ok === false) {
+    throw new Error(result.error || "Login misslyckades.");
+  }
+  return result;
+}
+
+function renderAccountStatus(localPlayer) {
+  const status = document.getElementById("account-status");
+  if (!status) return;
+  const remembered = localStorage.getItem("eutherpal.accountUser") || "";
+  if (localPlayer?.accountUser) {
+    status.textContent = `Kopplad till ${localPlayer.accountUser}.`;
+  } else if (remembered) {
+    status.textContent = `Inloggad som ${remembered}. Kopplas när du väljer pjäs.`;
+  } else {
+    status.textContent = "Inte inloggad. Vinnarpremie kräver mänskligt Eutherium-konto.";
+  }
+}
+
+function setAccountStatus(message) {
+  const status = document.getElementById("account-status");
+  if (status) status.textContent = message;
 }
 
 function buildingMarkers(space) {
@@ -1047,6 +1124,10 @@ function playerBody() {
 
 function cleanName(name) {
   return (name || "").trim().replace(/[\u0000-\u001f]/g, "").slice(0, 24);
+}
+
+function cleanAccountUser(value) {
+  return (value || "").trim().replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 48);
 }
 
 function escapeHtml(value) {
