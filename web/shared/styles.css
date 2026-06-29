@@ -140,6 +140,15 @@ textarea {
   text-align: center;
 }
 
+.bank-cat {
+  display: block;
+  width: min(36vw, 168px);
+  max-width: 72%;
+  margin: 0 auto 6px;
+  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.35));
+  pointer-events: none;
+}
+
 .board-center h1 {
   margin: 0 0 10px;
   font-size: clamp(2rem, 5vw, 4.8rem);
@@ -1231,6 +1240,13 @@ body[data-view="tv"] .board-center {
   width: min(34vw, 330px);
   max-width: calc(100% - 180px);
   padding: 14px;
+  transform: translateY(14px);
+}
+
+body[data-view="tv"] .bank-cat {
+  width: min(11vw, 138px);
+  max-width: 58%;
+  margin-bottom: 2px;
 }
 
 body[data-view="tv"] .board-center h1 {

@@ -17,6 +17,7 @@ const TOKEN_HATT_PNG: &[u8] = include_bytes!("../../web/assets/tokens/hatt.png")
 const TOKEN_SKEPP_PNG: &[u8] = include_bytes!("../../web/assets/tokens/skepp.png");
 const TOKEN_HUND_PNG: &[u8] = include_bytes!("../../web/assets/tokens/hund.png");
 const TOKEN_SKO_PNG: &[u8] = include_bytes!("../../web/assets/tokens/sko.png");
+const BANK_CAT_PNG: &[u8] = include_bytes!("../../web/assets/bank/bank-cat.png");
 const DEFAULT_PREPROMPT: &str = include_str!("../../prompts/supergemma.bank.sv.md");
 const DEFAULT_AI_TURN_PROMPT: &str = include_str!("../../prompts/ai-player-turn.sv.md");
 const DEFAULT_AI_PROFILES_TOML: &str =
@@ -579,6 +580,7 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
         ("GET", "/assets/tokens/skepp.png") => binary_asset(200, "image/png", TOKEN_SKEPP_PNG),
         ("GET", "/assets/tokens/hund.png") => binary_asset(200, "image/png", TOKEN_HUND_PNG),
         ("GET", "/assets/tokens/sko.png") => binary_asset(200, "image/png", TOKEN_SKO_PNG),
+        ("GET", "/assets/bank/bank-cat.png") => binary_asset(200, "image/png", BANK_CAT_PNG),
         _ => html(404, "<h1>404</h1><p>Sidan finns inte.</p>"),
     };
 
