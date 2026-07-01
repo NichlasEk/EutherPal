@@ -2,4 +2,6 @@
 <resources>
     <string name="app_name">EutherPål</string>
     <string name="default_server_url">http://192.168.32.186:8793/tv</string>
+    <string name="lan_server_url">http://192.168.32.186:8793/tv</string>
+    <string name="public_server_url">https://apothictech.se/eutherpal/tv</string>
 </resources>

@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="dark">
     <meta name="supported-color-schemes" content="dark">
     <title>EutherPål Mobil</title>
-    <link rel="stylesheet" href="/assets/styles.css">
-    <script defer src="/assets/app.js"></script>
+    <link rel="stylesheet" href="assets/styles.css">
+    <script defer src="assets/app.js"></script>
   </head>
   <body data-view="mobile">
     <main class="phone-shell">
@@ -98,6 +98,24 @@
                 <dt>Rum</dt>
                 <dd id="admin-room">-</dd>
               </dl>
+            </section>
+
+            <section class="control-panel">
+              <h2>Anslutning</h2>
+              <p class="connection-hint">Dela publik mobil-länk till spelare utanför LAN. TV:n kan vara kvar på lokal anslutning.</p>
+              <dl class="connection-grid">
+                <dt>LAN mobil</dt>
+                <dd><a id="connection-lan-mobile" href="#">-</a></dd>
+                <dt>Publik mobil</dt>
+                <dd><a id="connection-public-mobile" href="#">-</a></dd>
+                <dt>Publik TV</dt>
+                <dd><a id="connection-public-tv" href="#">-</a></dd>
+              </dl>
+              <div class="admin-actions">
+                <button id="copy-public-mobile-url" type="button">Kopiera mobil-länk</button>
+                <button id="open-public-mobile-url" type="button">Öppna publik mobil</button>
+              </div>
+              <p id="connection-status" class="connection-status">-</p>
             </section>
 
             <section class="control-panel">

@@ -20,13 +20,18 @@ import android.webkit.WebViewClient;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.TextView;
+import java.io.IOException;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
 public final class MainActivity extends Activity {
     private static final String PREFS = "eutherpal-tv";
     private static final String KEY_SERVER_URL = "server_url";
+    private static final String AUTO_SERVER_URL = "auto";
 
     private WebView webView;
     private TextView statusView;
+    private boolean triedPublicFallback = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -63,6 +68,12 @@ public final class MainActivity extends Activity {
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
+                    if (AUTO_SERVER_URL.equals(serverUrl()) && !triedPublicFallback) {
+                        triedPublicFallback = true;
+                        showStatus("Provar apothictech.se...");
+                        view.loadUrl(cacheBustedUrl(getString(R.string.public_server_url)));
+                        return;
+                    }
                     showStatus("Kunde inte nå EutherPål-servern. OK laddar om. Håll OK för serveradress.");
                 }
             }
@@ -113,12 +124,53 @@ public final class MainActivity extends Activity {
 
     private String serverUrl() {
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        return prefs.getString(KEY_SERVER_URL, getString(R.string.default_server_url));
+        return prefs.getString(KEY_SERVER_URL, AUTO_SERVER_URL);
     }
 
     private void loadServerUrl() {
         webView.clearCache(true);
-        webView.loadUrl(cacheBustedUrl(serverUrl()));
+        triedPublicFallback = false;
+        String url = serverUrl();
+        if (AUTO_SERVER_URL.equals(url)) {
+            showStatus("Letar EutherPål på LAN...");
+            loadAutoServerUrl();
+            return;
+        }
+        webView.loadUrl(cacheBustedUrl(url));
+    }
+
+    private void loadAutoServerUrl() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final String selected = probeUrl(getString(R.string.lan_server_url))
+                        ? getString(R.string.lan_server_url)
+                        : getString(R.string.public_server_url);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        showStatus(selected.contains("apothictech.se") ? "LAN saknas. Ansluter via apothictech.se..." : "Ansluter via LAN...");
+                        webView.loadUrl(cacheBustedUrl(selected));
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private boolean probeUrl(String url) {
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL(url.replace("/tv", "/health")).openConnection();
+            connection.setConnectTimeout(1200);
+            connection.setReadTimeout(1200);
+            connection.setRequestMethod("GET");
+            int status = connection.getResponseCode();
+            return status >= 200 && status < 500;
+        } catch (IOException error) {
+            return false;
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
     }
 
     private String cacheBustedUrl(String url) {
@@ -140,18 +192,23 @@ public final class MainActivity extends Activity {
     private void showServerDialog() {
         final EditText input = new EditText(this);
         input.setSingleLine(true);
-        input.setText(serverUrl());
+        input.setText(AUTO_SERVER_URL.equals(serverUrl()) ? "" : serverUrl());
         input.setSelectAllOnFocus(true);
         input.setTextColor(Color.BLACK);
 
         new AlertDialog.Builder(this)
                 .setTitle("EutherPål server")
-                .setMessage("Ange TV-URL eller serverbas. Exempel: http://192.168.32.186:8793/tv")
+                .setMessage("Lämna tomt för auto: LAN först, sedan apothictech.se. Annars ange TV-URL eller serverbas.")
                 .setView(input)
                 .setPositiveButton("Spara", new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
-                        saveServerUrl(input.getText().toString());
+                        String value = input.getText().toString().trim();
+                        if (value.isEmpty()) {
+                            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_SERVER_URL, AUTO_SERVER_URL).apply();
+                        } else {
+                            saveServerUrl(value);
+                        }
                         loadServerUrl();
                     }
                 })
@@ -159,7 +216,7 @@ public final class MainActivity extends Activity {
                 .setNeutralButton("Standard", new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
-                        saveServerUrl(getString(R.string.default_server_url));
+                        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_SERVER_URL, AUTO_SERVER_URL).apply();
                         loadServerUrl();
                     }
                 })

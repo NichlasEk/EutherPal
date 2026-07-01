@@ -1739,6 +1739,35 @@ body[data-view="tv"] .event-list {
   font-weight: 900;
 }
 
+.connection-hint,
+.connection-status {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+.connection-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 14px;
+  margin: 0 0 12px;
+}
+
+.connection-grid dt {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.connection-grid dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.connection-grid a {
+  color: var(--yellow);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
 .settings-form {
   display: grid;
   gap: 10px;

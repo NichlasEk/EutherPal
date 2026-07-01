@@ -4,6 +4,8 @@ const POLL_INTERVAL_MS = {
   admin: 5000,
 };
 const ADMIN_HEALTH_TTL_MS = 15000;
+const LAN_BASE_URL = "http://192.168.32.186:8793";
+const PUBLIC_BASE_URL = "https://apothictech.se/eutherpal";
 let latestMobileState = null;
 let cachedAdminHealth = null;
 let lastAdminHealthFetchAt = 0;
@@ -35,13 +37,13 @@ const tvTokenPositions = new Map();
 const tvTokenTimers = new Map();
 
 async function fetchState() {
-  const response = await fetch("/api/game");
+  const response = await fetch(appUrl("api/game"));
   if (!response.ok) throw new Error("Kunde inte hämta spelstatus");
   return response.json();
 }
 
 async function postAction(path, body) {
-  const response = await fetch(path, {
+  const response = await fetch(appUrl(path), {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
@@ -51,9 +53,22 @@ async function postAction(path, body) {
 }
 
 async function fetchSettings() {
-  const response = await fetch("/api/settings");
+  const response = await fetch(appUrl("api/settings"));
   if (!response.ok) throw new Error("Kunde inte hämta settings");
   return response.json();
+}
+
+function appBasePath() {
+  const currentPath = window.location.pathname || "";
+  for (const marker of ["/tv", "/mobile", "/admin"]) {
+    const markerIndex = currentPath.indexOf(marker);
+    if (markerIndex >= 0) return currentPath.slice(0, markerIndex).replace(/\/$/, "");
+  }
+  return "";
+}
+
+function appUrl(path) {
+  return `${appBasePath()}/${String(path || "").replace(/^\/+/, "")}`;
 }
 
 function startPolling(view) {
@@ -367,6 +382,7 @@ function renderAdmin(state, options = {}) {
   renderCachedAdminHealth();
   maybeRefreshAdminHealth(Boolean(options.forceHealth));
   document.getElementById("admin-room").textContent = state.roomCode;
+  renderConnectionPanel(state);
   renderAdminTools(state);
   renderBankChat(document.getElementById("admin-bank-chat"), state.bankChat);
   bindAdminBankChat();
@@ -389,7 +405,7 @@ function maybeRefreshAdminHealth(force = false) {
   if (adminHealthRequest) return;
 
   lastAdminHealthFetchAt = now;
-  adminHealthRequest = fetch("/health")
+  adminHealthRequest = fetch(appUrl("health"))
     .then((response) => response.json())
     .then((health) => {
       cachedAdminHealth = health;
@@ -402,6 +418,47 @@ function maybeRefreshAdminHealth(force = false) {
     .finally(() => {
       adminHealthRequest = null;
     });
+}
+
+function renderConnectionPanel(state) {
+  const publicMobile = `${PUBLIC_BASE_URL}/mobile`;
+  const publicTv = `${PUBLIC_BASE_URL}/tv`;
+  const lanMobile = `${LAN_BASE_URL}/mobile`;
+  const lanTv = `${LAN_BASE_URL}/tv`;
+  setConnectionLink("connection-lan-mobile", lanMobile);
+  setConnectionLink("connection-lan-tv", lanTv);
+  setConnectionLink("connection-public-mobile", publicMobile);
+  setConnectionLink("connection-public-tv", publicTv);
+
+  const status = document.getElementById("connection-status");
+  if (status) {
+    const currentBase = `${window.location.origin}${appBasePath()}`;
+    status.textContent = `Aktuell anslutning: ${currentBase} · rum ${state.roomCode}`;
+  }
+
+  const copyButton = document.getElementById("copy-public-mobile-url");
+  if (copyButton) {
+    copyButton.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(publicMobile);
+        if (status) status.textContent = `Kopierad: ${publicMobile}`;
+      } catch (error) {
+        if (status) status.textContent = publicMobile;
+      }
+    };
+  }
+
+  const openButton = document.getElementById("open-public-mobile-url");
+  if (openButton) {
+    openButton.onclick = () => window.open(publicMobile, "_blank", "noopener");
+  }
+}
+
+function setConnectionLink(id, url) {
+  const link = document.getElementById(id);
+  if (!link) return;
+  link.href = url;
+  link.textContent = url;
 }
 
 async function renderSettings() {
@@ -1076,7 +1133,7 @@ function bindAccountLogin(state) {
 }
 
 async function postAccountLogin(body) {
-  const response = await fetch("/api/account/login", {
+  const response = await fetch(appUrl("api/account/login"), {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
@@ -1194,11 +1251,11 @@ function tokenAvatar(player, size = "mini") {
 
 function tokenIcon(token) {
   return {
-    bil: "/assets/tokens/bil.png",
-    hatt: "/assets/tokens/hatt.png",
-    skepp: "/assets/tokens/skepp.png",
-    hund: "/assets/tokens/hund.png",
-    sko: "/assets/tokens/sko.png",
+    bil: appUrl("assets/tokens/bil.png"),
+    hatt: appUrl("assets/tokens/hatt.png"),
+    skepp: appUrl("assets/tokens/skepp.png"),
+    hund: appUrl("assets/tokens/hund.png"),
+    sko: appUrl("assets/tokens/sko.png"),
   }[token] || "";
 }
 

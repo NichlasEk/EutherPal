@@ -275,11 +275,19 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
 
     let method = request_line.split_whitespace().next().unwrap_or("GET");
     let target = request_line.split_whitespace().nth(1).unwrap_or("/");
-    let (path, query) = split_target(target);
+    let (raw_path, query) = split_target(target);
+    let path = route_path(raw_path);
     let body = read_body(&mut reader, &headers)?;
+
+    if let Some(location) = canonical_path_redirect(raw_path) {
+        stream.write_all(&redirect(location))?;
+        stream.flush()?;
+        return Ok(());
+    }
 
     let response = match (method, path) {
         ("GET", "/") => redirect("/tv"),
+        ("GET", "/__eutherpal_root") => redirect("/eutherpal/tv"),
         ("GET", "/health") => {
             let game = game.lock().expect("game state lock");
             json(200, &health_json(&game))
@@ -613,9 +621,9 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
             game.admin_bank_message(&message);
             json(200, &game.to_json())
         }
-        ("GET", "/tv") | ("GET", "/tv/") => html(200, TV_HTML),
-        ("GET", "/mobile") | ("GET", "/mobile/") => html(200, MOBILE_HTML),
-        ("GET", "/admin") | ("GET", "/admin/") => html(200, ADMIN_HTML),
+        ("GET", "/tv") => html(200, TV_HTML),
+        ("GET", "/mobile") => html(200, MOBILE_HTML),
+        ("GET", "/admin") => html(200, ADMIN_HTML),
         ("GET", "/assets/styles.css") => asset(200, "text/css; charset=utf-8", STYLES_CSS),
         ("GET", "/assets/app.js") => asset(200, "application/javascript; charset=utf-8", APP_JS),
         ("GET", "/assets/tokens/bil.png") => binary_asset(200, "image/png", TOKEN_BIL_PNG),
@@ -4591,6 +4599,25 @@ fn split_target(target: &str) -> (&str, &str) {
     match target.split_once('?') {
         Some((path, query)) => (path, query),
         None => (target, ""),
+    }
+}
+
+fn route_path(path: &str) -> &str {
+    if path == "/eutherpal" || path == "/eutherpal/" {
+        return "/__eutherpal_root";
+    }
+    path.strip_prefix("/eutherpal").unwrap_or(path)
+}
+
+fn canonical_path_redirect(path: &str) -> Option<&'static str> {
+    match path {
+        "/tv/" => Some("/tv"),
+        "/mobile/" => Some("/mobile"),
+        "/admin/" => Some("/admin"),
+        "/eutherpal/tv/" => Some("/eutherpal/tv"),
+        "/eutherpal/mobile/" => Some("/eutherpal/mobile"),
+        "/eutherpal/admin/" => Some("/eutherpal/admin"),
+        _ => None,
     }
 }
 

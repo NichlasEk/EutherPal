@@ -23,8 +23,8 @@ echo "Installing APKs into remote EutherPal dist paths..."
 ssh -tt "$REMOTE" "cp /tmp/eutherpal-tv.apk '$REMOTE_ROOT/android-tv/dist/eutherpal-tv.apk' && cp /tmp/eutherpal-mobile.apk '$REMOTE_ROOT/android-mobile/dist/eutherpal-mobile.apk' && sha256sum '$REMOTE_ROOT/android-tv/dist/eutherpal-tv.apk' '$REMOTE_ROOT/android-mobile/dist/eutherpal-mobile.apk'"
 
 echo "Verifying EutherOxide download routes..."
-REMOTE_TV_SHA="$(ssh "$REMOTE" "curl -fsS http://127.0.0.1:8080/downloads/EutherPalTV-release-signed.apk | sha256sum | awk '{print \\\$1}'")"
-REMOTE_MOBILE_SHA="$(ssh "$REMOTE" "curl -fsS http://127.0.0.1:8080/downloads/EutherPalMobile-release-signed.apk | sha256sum | awk '{print \\\$1}'")"
+REMOTE_TV_SHA="$(ssh "$REMOTE" "curl -fsS http://127.0.0.1:8080/downloads/EutherPalTV-release-signed.apk | sha256sum | cut -d' ' -f1")"
+REMOTE_MOBILE_SHA="$(ssh "$REMOTE" "curl -fsS http://127.0.0.1:8080/downloads/EutherPalMobile-release-signed.apk | sha256sum | cut -d' ' -f1")"
 
 if [[ "$LOCAL_TV_SHA" != "$REMOTE_TV_SHA" ]]; then
   echo "TV APK hash mismatch: local=$LOCAL_TV_SHA remote=$REMOTE_TV_SHA" >&2
