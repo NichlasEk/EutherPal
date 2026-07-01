@@ -4050,7 +4050,7 @@ impl GameState {
             .join(",");
 
         format!(
-            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"aiTurnSource\":\"{}\",\"aiTurnThought\":\"{}\",\"stopped\":{},\"gameOver\":{},\"dice\":[{},{}],\"freeParkingPot\":{},\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"assetActions\":[{}],\"bankProposals\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}],\"bankChat\":[{}]}}",
+            "{{\"roomCode\":\"{}\",\"phase\":\"{}\",\"currentPlayer\":\"{}\",\"bankMessage\":\"{}\",\"aiTurnSource\":\"{}\",\"aiTurnThought\":\"{}\",\"stopped\":{},\"gameOver\":{},\"debtAlert\":{},\"dice\":[{},{}],\"freeParkingPot\":{},\"pendingOffer\":{},\"auction\":{},\"drawnCard\":{},\"buildableProperties\":[{}],\"assetActions\":[{}],\"bankProposals\":[{}],\"players\":[{}],\"tokenChoices\":[{}],\"spaces\":[{}],\"events\":[{}],\"bankChat\":[{}]}}",
             escape_json(&self.room_code),
             self.phase.as_str(),
             escape_json(current),
@@ -4059,6 +4059,7 @@ impl GameState {
             escape_json(&self.ai_turn_thought),
             self.stopped,
             self.game_over_json(),
+            self.debt_alert_json(),
             self.dice[0],
             self.dice[1],
             self.free_parking_pot,
@@ -4073,6 +4074,43 @@ impl GameState {
             spaces,
             events,
             bank_chat
+        )
+    }
+
+    fn debt_alert_json(&self) -> String {
+        let Some((player_index, player)) = self
+            .players
+            .iter()
+            .enumerate()
+            .filter(|(_, player)| !player.bankrupt && player.cash < 0)
+            .min_by_key(|(_, player)| player.cash)
+        else {
+            return "null".to_string();
+        };
+        let debt = -player.cash;
+        let liquidation_value = self.liquidation_value(player_index);
+        let can_liquidate = liquidation_value >= debt;
+        let title = format!("{} riskerar konkurs", player.name);
+        let message = if can_liquidate {
+            format!(
+                "{} ligger {debt} kr back. Spelet väntar tills skulden är löst genom att sälja byggnader, inteckna, ta emot gåva, lån eller byte.",
+                player.name
+            )
+        } else {
+            format!(
+                "{} ligger {debt} kr back och saknar täckning. Nu är det dags att låna ut pengar, erbjuda byte/gåva eller låta spelaren begära konkurs hos banken.",
+                player.name
+            )
+        };
+        format!(
+            "{{\"player\":\"{}\",\"debt\":{},\"cash\":{},\"liquidationValue\":{},\"canLiquidate\":{},\"title\":\"{}\",\"message\":\"{}\"}}",
+            escape_json(&player.name),
+            debt,
+            player.cash,
+            liquidation_value,
+            can_liquidate,
+            escape_json(&title),
+            escape_json(&message)
         )
     }
 
@@ -5640,6 +5678,21 @@ Offensiv och bytesglad.
 
         assert!(!game.players[0].bankrupt);
         assert!(game.bank_message.contains("Begär konkurs"));
+    }
+
+    #[test]
+    fn debt_alert_json_highlights_bankruptcy_risk() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+        game.players[0].cash = -20_000;
+
+        let json = game.to_json();
+
+        assert!(json.contains("\"debtAlert\":{"));
+        assert!(json.contains("\"player\":\"Maja\""));
+        assert!(json.contains("\"debt\":20000"));
+        assert!(json.contains("riskerar konkurs"));
+        assert!(json.contains("låna ut pengar"));
     }
 
     #[test]

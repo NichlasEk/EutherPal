@@ -187,6 +187,65 @@ textarea {
   line-height: 1.2;
 }
 
+.debt-alert {
+  display: grid;
+  gap: 6px;
+  width: min(100%, 42ch);
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 3px solid var(--red);
+  border-radius: 8px;
+  background: rgba(60, 38, 24, 0.96);
+  color: #fbf1c7;
+  box-shadow: 0 0 0 2px rgba(250, 189, 47, 0.35), 0 14px 30px rgba(0, 0, 0, 0.28);
+}
+
+.debt-alert[hidden] {
+  display: none;
+}
+
+.debt-alert strong {
+  color: var(--yellow);
+  font-size: 1rem;
+  line-height: 1.05;
+}
+
+.debt-alert p,
+.debt-alert em {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.25;
+}
+
+.debt-alert em {
+  color: var(--ink);
+  font-style: normal;
+  font-weight: 800;
+}
+
+.debt-alert-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.debt-alert-stats span {
+  min-width: 112px;
+  padding: 4px 7px;
+  border: 1px solid rgba(250, 189, 47, 0.55);
+  border-radius: 5px;
+  background: rgba(29, 32, 33, 0.58);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.tv-debt-alert {
+  position: relative;
+  z-index: 3;
+}
+
 .game-over-screen {
   position: absolute;
   inset: 5.5%;

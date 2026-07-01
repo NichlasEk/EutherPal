@@ -97,6 +97,7 @@ function renderTv(state) {
   document.getElementById("dice").textContent =
     state.phase === "token_selection" ? "Pjäsval" : `Tärning: ${state.dice.join(" + ")}`;
   document.getElementById("bank-message").textContent = state.bankMessage;
+  renderDebtAlert(document.getElementById("tv-debt-alert"), state.debtAlert, "tv");
   renderAiTurnThought(state);
   renderGameOverScreen(state);
   renderTvAuction(state);
@@ -308,6 +309,7 @@ function renderMobile(state) {
           ? "Det är din tur."
           : `${state.currentPlayer} har tur.`;
   document.getElementById("mobile-bank-message").textContent = state.bankMessage;
+  renderDebtAlert(document.getElementById("mobile-debt-alert"), state.debtAlert, "mobile");
   document.getElementById("join-button").onclick = () => {
     const room = document.getElementById("room-input").value || state.roomCode;
     document.getElementById("mobile-status").textContent = `Ansluten till ${room}.`;
@@ -336,6 +338,29 @@ function renderMobile(state) {
     runMobileAction(event.currentTarget, "Köper...", "/api/game/buy", playerBody());
   document.getElementById("decline-button").onclick = (event) =>
     runMobileAction(event.currentTarget, "Startar auktion...", "/api/game/decline", playerBody());
+}
+
+function renderDebtAlert(container, alert, mode) {
+  if (!container) return;
+  if (!alert) {
+    container.hidden = true;
+    container.innerHTML = "";
+    return;
+  }
+  container.hidden = false;
+  const debt = Number(alert.debt || 0);
+  const liquidation = Number(alert.liquidationValue || 0);
+  const hint = alert.canLiquidate
+    ? "Sälj byggnader eller inteckna, annars kan andra hjälpa med lån, byte eller gåva."
+    : "Andra spelare behöver agera nu: lån, byte, gåva eller låt banken hantera konkurs.";
+  const stats = mode === "tv"
+    ? `<div class="debt-alert-stats"><span>Skuld <strong>${debt} kr</strong></span><span>Täckning <strong>${liquidation} kr</strong></span></div>`
+    : `<p class="debt-alert-stats">Skuld ${debt} kr · möjlig likvidering ${liquidation} kr</p>`;
+  container.innerHTML = `
+    <strong>${escapeHtml(alert.title || `${alert.player || "Spelare"} riskerar konkurs`)}</strong>
+    <p>${escapeHtml(alert.message || "")}</p>
+    ${stats}
+    <em>${escapeHtml(hint)}</em>`;
 }
 
 function renderAdmin(state, options = {}) {
