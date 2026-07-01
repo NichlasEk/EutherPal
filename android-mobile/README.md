@@ -2,7 +2,10 @@
 
 Minimal Android WebView-wrapper för telefonerna. Appen öppnar spelarpanelen på:
 
-`http://192.168.32.186:8793/mobile`
+LAN först, sedan publik fallback:
+
+- `http://192.168.32.186:8793/mobile`
+- `https://apothictech.se/eutherpal/mobile`
 
 Mobilvyn har två sidor: spelare och admin. Svep vänster för admin och höger för spelare, eller tryck på flikarna högst upp.
 
