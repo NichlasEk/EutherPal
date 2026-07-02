@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -39,6 +40,7 @@ const GO_SALARY: i32 = 2000;
 const JAIL_FINE: i32 = 500;
 const AUCTION_MIN_MS: u128 = 20_000;
 const DEFAULT_LLM_TIMEOUT_SECS: u64 = 90;
+const DEFAULT_ROOM_CODE: &str = "PAL-001";
 
 const TOKEN_CHOICES: &[(&str, &str)] = &[
     ("bil", "Bil"),
@@ -230,11 +232,60 @@ enum Phase {
 }
 
 type SharedGame = Arc<Mutex<GameState>>;
+type SharedRooms = Arc<Mutex<GameRooms>>;
+
+struct GameRooms {
+    games: HashMap<String, SharedGame>,
+    next_room_number: usize,
+}
+
+impl GameRooms {
+    fn new() -> Self {
+        let mut games = HashMap::new();
+        let mut default_game = GameState::new();
+        default_game.set_room_code(DEFAULT_ROOM_CODE);
+        games.insert(
+            DEFAULT_ROOM_CODE.to_string(),
+            Arc::new(Mutex::new(default_game)),
+        );
+        Self {
+            games,
+            next_room_number: 2,
+        }
+    }
+
+    fn game_for(&mut self, room_code: &str) -> SharedGame {
+        let room_code = normalize_room_code(room_code);
+        if let Some(game) = self.games.get(&room_code) {
+            return Arc::clone(game);
+        }
+        let mut game = GameState::new();
+        game.set_room_code(&room_code);
+        let shared = Arc::new(Mutex::new(game));
+        self.games.insert(room_code, Arc::clone(&shared));
+        shared
+    }
+
+    fn create_room(&mut self, player_count: usize, ai_count: usize, ai_names: &str) -> SharedGame {
+        loop {
+            let room_code = format!("PAL-{:03}", self.next_room_number);
+            self.next_room_number += 1;
+            if self.games.contains_key(&room_code) {
+                continue;
+            }
+            let mut game = GameState::new_with_ai_players(player_count, ai_count, ai_names);
+            game.set_room_code(&room_code);
+            let shared = Arc::new(Mutex::new(game));
+            self.games.insert(room_code, Arc::clone(&shared));
+            return shared;
+        }
+    }
+}
 
 fn main() -> std::io::Result<()> {
     let bind_addr = env::var("EUTHERPAL_BIND").unwrap_or_else(|_| "127.0.0.1:8793".to_string());
     let listener = TcpListener::bind(&bind_addr)?;
-    let game = Arc::new(Mutex::new(GameState::new()));
+    let rooms = Arc::new(Mutex::new(GameRooms::new()));
 
     println!("EutherPål dev server listening on http://{bind_addr}");
     println!("TV:     http://{bind_addr}/tv");
@@ -244,9 +295,9 @@ fn main() -> std::io::Result<()> {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                let game = Arc::clone(&game);
+                let rooms = Arc::clone(&rooms);
                 thread::spawn(move || {
-                    if let Err(error) = handle_connection(stream, game) {
+                    if let Err(error) = handle_connection(stream, rooms) {
                         eprintln!("request failed: {error}");
                     }
                 });
@@ -258,7 +309,7 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result<()> {
+fn handle_connection(mut stream: TcpStream, rooms: SharedRooms) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
@@ -278,6 +329,7 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
     let (raw_path, query) = split_target(target);
     let path = route_path(raw_path);
     let body = read_body(&mut reader, &headers)?;
+    let game = game_for_request(&rooms, query, &body);
 
     if let Some(location) = canonical_path_redirect(raw_path) {
         stream.write_all(&redirect(location))?;
@@ -332,15 +384,36 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
             let ai_names = form_value(&body, "aiNames")
                 .or_else(|| query_value(query, "aiNames"))
                 .unwrap_or_default();
+            let room_code = requested_room_code(query, &body);
             let mut game = game.lock().expect("game state lock");
             *game = GameState::new_with_ai_players(player_count, ai_count, &ai_names);
+            game.set_room_code(&room_code);
+            json(200, &game.to_json())
+        }
+        ("POST", "/api/rooms/new") => {
+            let player_count = form_value(&body, "players")
+                .or_else(|| query_value(query, "players"))
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(DEFAULT_PLAYER_COUNT);
+            let ai_count = form_value(&body, "aiPlayers")
+                .or_else(|| query_value(query, "aiPlayers"))
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            let ai_names = form_value(&body, "aiNames")
+                .or_else(|| query_value(query, "aiNames"))
+                .unwrap_or_default();
+            let game = {
+                let mut rooms = rooms.lock().expect("rooms lock");
+                rooms.create_room(player_count, ai_count, &ai_names)
+            };
+            let game = game.lock().expect("game state lock");
             json(200, &game.to_json())
         }
         ("POST", "/api/game/save") => {
             let mut game = game.lock().expect("game state lock");
             match game.save_to_disk() {
                 Ok(()) => {
-                    game.bank_message = format!("Spelet sparades till {GAME_STATE_PATH}.");
+                    game.bank_message = format!("Spelet sparades till {}.", game.save_path());
                     game.push_event("Spelet sparades.".to_string());
                     json(200, &game.to_json())
                 }
@@ -352,10 +425,11 @@ fn handle_connection(mut stream: TcpStream, game: SharedGame) -> std::io::Result
         }
         ("POST", "/api/game/load") => {
             let mut game = game.lock().expect("game state lock");
-            match GameState::load_from_disk() {
+            let room_code = game.room_code.clone();
+            match GameState::load_from_disk(&room_code) {
                 Ok(loaded) => {
                     *game = loaded;
-                    game.bank_message = format!("Spelet laddades från {GAME_STATE_PATH}.");
+                    game.bank_message = format!("Spelet laddades från {}.", game.save_path());
                     game.push_event("Spelet laddades.".to_string());
                     json(200, &game.to_json())
                 }
@@ -952,6 +1026,11 @@ impl GameState {
         }
     }
 
+    fn set_room_code(&mut self, room_code: &str) {
+        self.room_code = normalize_room_code(room_code);
+        self.game_id = format!("{}-{}", self.room_code, now_millis());
+    }
+
     fn configure_ai_players(&mut self, ai_count: usize, ai_names: &str) {
         let ai_count = ai_count.min(self.players.len());
         let human_count = self.players.len().saturating_sub(ai_count);
@@ -1046,7 +1125,8 @@ impl GameState {
     }
 
     fn save_to_disk(&self) -> std::io::Result<()> {
-        if let Some(parent) = Path::new(GAME_STATE_PATH).parent() {
+        let path = self.save_path();
+        if let Some(parent) = Path::new(&path).parent() {
             fs::create_dir_all(parent)?;
         }
         let snapshot = self.to_snapshot();
@@ -1054,17 +1134,22 @@ impl GameState {
             "{{\"format\":\"eutherpal-v1\",\"state\":\"{}\"}}\n",
             escape_json(&snapshot)
         );
-        fs::write(GAME_STATE_PATH, json)
+        fs::write(path, json)
     }
 
-    fn load_from_disk() -> std::io::Result<Self> {
-        let json = fs::read_to_string(GAME_STATE_PATH)?;
+    fn load_from_disk(room_code: &str) -> std::io::Result<Self> {
+        let path = game_state_path(room_code);
+        let json = fs::read_to_string(path)?;
         let snapshot = json_string_field(&json, "state").ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "saknar state i sparfilen")
         })?;
         Self::from_snapshot(&snapshot).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "kunde inte läsa sparfilen")
         })
+    }
+
+    fn save_path(&self) -> String {
+        game_state_path(&self.room_code)
     }
 
     fn admin_adjust_player(&mut self, player_name: &str, cash_delta: i32, position: Option<usize>) {
@@ -4632,6 +4717,46 @@ fn query_value(query: &str, key: &str) -> Option<String> {
     form_value(query, key)
 }
 
+fn game_for_request(rooms: &SharedRooms, query: &str, body: &str) -> SharedGame {
+    let room_code = requested_room_code(query, body);
+    let mut rooms = rooms.lock().expect("rooms lock");
+    rooms.game_for(&room_code)
+}
+
+fn requested_room_code(query: &str, body: &str) -> String {
+    form_value(body, "room")
+        .or_else(|| form_value(body, "roomCode"))
+        .or_else(|| query_value(query, "room"))
+        .or_else(|| query_value(query, "roomCode"))
+        .map(|room| normalize_room_code(&room))
+        .unwrap_or_else(|| DEFAULT_ROOM_CODE.to_string())
+}
+
+fn normalize_room_code(room_code: &str) -> String {
+    let mut normalized = room_code
+        .trim()
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || *character == '-' || *character == '_'
+        })
+        .take(16)
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if normalized.is_empty() {
+        normalized = DEFAULT_ROOM_CODE.to_string();
+    }
+    normalized
+}
+
+fn game_state_path(room_code: &str) -> String {
+    let room_code = normalize_room_code(room_code);
+    if room_code == DEFAULT_ROOM_CODE {
+        GAME_STATE_PATH.to_string()
+    } else {
+        format!("data/game-state-{room_code}.json")
+    }
+}
+
 fn url_decode(value: &str) -> String {
     let mut bytes = Vec::new();
     let raw = value.as_bytes();
@@ -5482,6 +5607,28 @@ mod tests {
         assert_eq!(game.players[2].name, "Rut");
         assert_eq!(game.players[3].name, "Bosse");
         assert!(game.bank_message.contains("2 AI-spelare"));
+    }
+
+    #[test]
+    fn game_rooms_keep_room_state_isolated() {
+        let mut rooms = GameRooms::new();
+        let default_room = rooms.game_for("PAL-001");
+        let second_room = rooms.create_room(3, 1, "Rut");
+
+        {
+            let mut game = default_room.lock().expect("default room lock");
+            game.players[0].name = "Maja".to_string();
+        }
+        {
+            let game = second_room.lock().expect("second room lock");
+            assert_eq!(game.room_code, "PAL-002");
+            assert_eq!(game.players.len(), 3);
+            assert_eq!(game.players[2].name, "Rut");
+            assert_ne!(game.players[0].name, "Maja");
+        }
+
+        assert_eq!(game_state_path("PAL-001"), GAME_STATE_PATH);
+        assert_eq!(game_state_path("pal-002"), "data/game-state-PAL-002.json");
     }
 
     #[test]

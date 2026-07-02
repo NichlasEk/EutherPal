@@ -357,6 +357,19 @@ textarea {
   font-size: 1.55rem;
 }
 
+.new-room-button {
+  margin-top: 10px;
+  border: 2px solid rgba(250, 189, 47, 0.8);
+  background: rgba(177, 98, 134, 0.22);
+  color: var(--fg-strong);
+  font-size: 0.86rem;
+  padding: 8px 12px;
+}
+
+.new-room-button:disabled {
+  opacity: 0.65;
+}
+
 .free-parking-pot {
   display: inline-grid;
   grid-template-columns: auto auto;
@@ -1384,6 +1397,12 @@ body[data-view="tv"] .room-code span {
 
 body[data-view="tv"] .room-code strong {
   font-size: 1.16rem;
+}
+
+body[data-view="tv"] .new-room-button {
+  margin-top: 7px;
+  font-size: 0.64rem;
+  padding: 6px 10px;
 }
 
 body[data-view="tv"] .free-parking-pot {

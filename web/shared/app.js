@@ -10,6 +10,7 @@ let latestMobileState = null;
 let cachedAdminHealth = null;
 let lastAdminHealthFetchAt = 0;
 let adminHealthRequest = null;
+let currentRoomCode = initialRoomCode();
 
 (async function bootEutherPal() {
   const view = document.body.dataset.view;
@@ -68,7 +69,55 @@ function appBasePath() {
 }
 
 function appUrl(path) {
-  return `${appBasePath()}/${String(path || "").replace(/^\/+/, "")}`;
+  const cleanPath = String(path || "").replace(/^\/+/, "");
+  let url = `${appBasePath()}/${cleanPath}`;
+  if (pathNeedsRoom(cleanPath)) {
+    url = appendRoomParam(url, currentRoomCode);
+  }
+  return url;
+}
+
+function pathNeedsRoom(path) {
+  return (
+    path === "health" ||
+    path.startsWith("api/game") ||
+    path.startsWith("api/bank") ||
+    path.startsWith("api/account")
+  );
+}
+
+function appendRoomParam(url, roomCode) {
+  const room = normalizeRoomCode(roomCode);
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}room=${encodeURIComponent(room)}`;
+}
+
+function initialRoomCode() {
+  const urlRoom = new URLSearchParams(window.location.search).get("room");
+  const storedRoom = window.localStorage?.getItem("eutherpal-room");
+  return normalizeRoomCode(urlRoom || storedRoom || "PAL-001");
+}
+
+function normalizeRoomCode(roomCode) {
+  const normalized = String(roomCode || "")
+    .trim()
+    .replace(/[^a-z0-9_-]/gi, "")
+    .slice(0, 16)
+    .toUpperCase();
+  return normalized || "PAL-001";
+}
+
+function setCurrentRoomCode(roomCode, updateUrl = true) {
+  currentRoomCode = normalizeRoomCode(roomCode);
+  try {
+    window.localStorage?.setItem("eutherpal-room", currentRoomCode);
+  } catch (_) {
+    // localStorage kan vara avstängt i vissa WebView-lägen.
+  }
+  if (!updateUrl) return;
+  const url = new URL(window.location.href);
+  url.searchParams.set("room", currentRoomCode);
+  window.history.replaceState(null, "", url.toString());
 }
 
 function startPolling(view) {
@@ -106,8 +155,10 @@ function mobileInputBusy() {
 
 function renderTv(state) {
   latestTvState = state;
+  setCurrentRoomCode(state.roomCode, false);
   const visiblePlayers = playersForTvBoard(state);
   document.getElementById("room-code").textContent = state.roomCode;
+  bindTvNewRoomButton(state);
   document.getElementById("current-player").textContent = state.currentPlayer;
   document.getElementById("dice").textContent =
     state.phase === "token_selection" ? "Pjäsval" : `Tärning: ${state.dice.join(" + ")}`;
@@ -145,6 +196,25 @@ function renderTv(state) {
 
   renderPropertyCard(document.getElementById("tv-card"), selectedSpace(state));
   renderEvents(document.getElementById("tv-events"), state.events);
+}
+
+function bindTvNewRoomButton(state) {
+  const button = document.getElementById("tv-new-room");
+  if (!button) return;
+  button.onclick = async () => {
+    button.disabled = true;
+    button.textContent = "Skapar rum...";
+    try {
+      const updated = await postAction("/api/rooms/new", new URLSearchParams({
+        players: String((state.players || []).length || 4),
+      }).toString());
+      setCurrentRoomCode(updated.roomCode);
+      renderTv(updated);
+    } finally {
+      button.disabled = false;
+      button.textContent = "Starta nytt rum";
+    }
+  };
 }
 
 function renderAiTurnThought(state) {
@@ -310,7 +380,10 @@ function tvPlayerKey(player, index) {
 
 function renderMobile(state) {
   latestMobileState = state;
+  setCurrentRoomCode(state.roomCode, false);
   syncNameInput();
+  const roomInput = document.getElementById("room-input");
+  if (roomInput && document.activeElement !== roomInput) roomInput.value = state.roomCode;
   const localPlayerName = localPlayer();
   const local = state.players.find((player) => player.name === localPlayerName);
   document.getElementById("mobile-status").textContent =
@@ -325,9 +398,13 @@ function renderMobile(state) {
           : `${state.currentPlayer} har tur.`;
   document.getElementById("mobile-bank-message").textContent = state.bankMessage;
   renderDebtAlert(document.getElementById("mobile-debt-alert"), state.debtAlert, "mobile");
-  document.getElementById("join-button").onclick = () => {
+  document.getElementById("join-button").onclick = async () => {
     const room = document.getElementById("room-input").value || state.roomCode;
-    document.getElementById("mobile-status").textContent = `Ansluten till ${room}.`;
+    setCurrentRoomCode(room);
+    document.getElementById("mobile-status").textContent = `Ansluter till ${currentRoomCode}...`;
+    const updated = await fetchState();
+    renderMobile(updated);
+    renderMobileAdminIfVisible(updated, true);
   };
   document.getElementById("save-name-button").onclick = () => {
     saveLocalPlayer(document.getElementById("player-name-input").value);
@@ -379,6 +456,7 @@ function renderDebtAlert(container, alert, mode) {
 }
 
 function renderAdmin(state, options = {}) {
+  setCurrentRoomCode(state.roomCode, false);
   renderCachedAdminHealth();
   maybeRefreshAdminHealth(Boolean(options.forceHealth));
   document.getElementById("admin-room").textContent = state.roomCode;
@@ -421,10 +499,10 @@ function maybeRefreshAdminHealth(force = false) {
 }
 
 function renderConnectionPanel(state) {
-  const publicMobile = `${PUBLIC_BASE_URL}/mobile`;
-  const publicTv = `${PUBLIC_BASE_URL}/tv`;
-  const lanMobile = `${LAN_BASE_URL}/mobile`;
-  const lanTv = `${LAN_BASE_URL}/tv`;
+  const publicMobile = appendRoomParam(`${PUBLIC_BASE_URL}/mobile`, state.roomCode);
+  const publicTv = appendRoomParam(`${PUBLIC_BASE_URL}/tv`, state.roomCode);
+  const lanMobile = appendRoomParam(`${LAN_BASE_URL}/mobile`, state.roomCode);
+  const lanTv = appendRoomParam(`${LAN_BASE_URL}/tv`, state.roomCode);
   setConnectionLink("connection-lan-mobile", lanMobile);
   setConnectionLink("connection-lan-tv", lanTv);
   setConnectionLink("connection-public-mobile", publicMobile);
