@@ -149,6 +149,7 @@ enum AiDecision {
     Bankrupt,
     Build,
     Trade,
+    CounterProposal,
     AcceptProposal,
     DeclineProposal,
     Wait,
@@ -2607,11 +2608,15 @@ impl GameState {
                 .map(|player| player.controller == PlayerController::Ai && player.token.is_none())
                 .unwrap_or(false),
             Phase::Play => {
-                self.players
-                    .get(self.current_player_index)
-                    .map(|player| player.controller == PlayerController::Ai && !player.bankrupt)
-                    .unwrap_or(false)
-                    && self.auction.is_none()
+                self.ai_pending_proposal_responder_index().is_some()
+                    || (self.auction.is_none()
+                        && self
+                            .players
+                            .get(self.current_player_index)
+                            .map(|player| {
+                                player.controller == PlayerController::Ai && !player.bankrupt
+                            })
+                            .unwrap_or(false))
             }
             Phase::Auction => self
                 .auction
@@ -2630,8 +2635,9 @@ impl GameState {
                     .map(|player| player.name.clone())
                     .unwrap_or_else(|| "AI".to_string()),
                 _ => self
-                    .players
-                    .get(self.current_player_index)
+                    .ai_pending_proposal_responder_index()
+                    .or(Some(self.current_player_index))
+                    .and_then(|index| self.players.get(index))
                     .map(|player| player.name.clone())
                     .unwrap_or_else(|| "AI".to_string()),
             };
@@ -2657,7 +2663,9 @@ impl GameState {
         if self.stopped || self.phase != Phase::Play {
             return None;
         }
-        let player_index = self.current_player_index;
+        let player_index = self
+            .ai_pending_proposal_responder_index()
+            .unwrap_or(self.current_player_index);
         if self
             .players
             .get(player_index)
@@ -2684,7 +2692,10 @@ impl GameState {
         if self.stopped || self.phase != Phase::Play {
             return;
         }
-        let player_index = self.current_player_index;
+        let Some(player_index) = self.player_index_by_name(player_name) else {
+            return;
+        };
+        let is_proposal_response = self.pending_bank_proposal_for(player_index).is_some();
         if self
             .players
             .get(player_index)
@@ -2692,6 +2703,7 @@ impl GameState {
                 player.name != player_name
                     || player.controller != PlayerController::Ai
                     || player.bankrupt
+                    || (!is_proposal_response && player_index != self.current_player_index)
             })
             .unwrap_or(true)
         {
@@ -2774,6 +2786,7 @@ impl GameState {
             }
             AiDecision::Build => self.ai_build_once(player_index),
             AiDecision::Trade => self.ai_propose_trade_once(player_index),
+            AiDecision::CounterProposal => self.ai_counter_proposal_once(player_index),
             AiDecision::AcceptProposal => {
                 let Some(proposal_id) = self.pending_bank_proposal_for(player_index) else {
                     return false;
@@ -2839,6 +2852,8 @@ impl GameState {
         if let Some(proposal) = self.awaiting_bank_proposal_for(player_index) {
             return if self.ai_should_accept_proposal(proposal, player_index) {
                 AiDecision::AcceptProposal
+            } else if self.ai_can_counter_proposal(proposal, player_index) {
+                AiDecision::CounterProposal
             } else {
                 AiDecision::DeclineProposal
             };
@@ -2872,7 +2887,15 @@ impl GameState {
             }
         }
         if self.pending_bank_proposal_for(player_index).is_some() {
-            return vec![AiDecision::AcceptProposal, AiDecision::DeclineProposal];
+            let mut actions = vec![AiDecision::AcceptProposal, AiDecision::DeclineProposal];
+            if self
+                .awaiting_bank_proposal_for(player_index)
+                .map(|proposal| self.ai_can_counter_proposal(proposal, player_index))
+                .unwrap_or(false)
+            {
+                actions.push(AiDecision::CounterProposal);
+            }
+            return actions;
         }
         if self.players[player_index].cash < 0 {
             let mut actions = Vec::new();
@@ -3111,6 +3134,105 @@ impl GameState {
         true
     }
 
+    fn ai_pending_proposal_responder_index(&self) -> Option<usize> {
+        self.bank_proposals
+            .iter()
+            .filter_map(|proposal| {
+                self.players
+                    .get(proposal.awaiting_player_index)
+                    .map(|player| (proposal, player))
+            })
+            .find(|(_, player)| player.controller == PlayerController::Ai && !player.bankrupt)
+            .map(|(proposal, _)| proposal.awaiting_player_index)
+    }
+
+    fn ai_counter_proposal_once(&mut self, player_index: usize) -> bool {
+        let Some(position) = self
+            .bank_proposals
+            .iter()
+            .position(|proposal| proposal.awaiting_player_index == player_index)
+        else {
+            return false;
+        };
+        let proposal = self.bank_proposals[position].clone();
+        if !self.ai_can_counter_proposal(&proposal, player_index) {
+            return false;
+        }
+        let Some(counter_amount) = self.ai_counter_cash_amount(&proposal, player_index) else {
+            return false;
+        };
+        let other = if player_index == proposal.requester_index {
+            proposal.counterparty_index
+        } else {
+            proposal.requester_index
+        };
+        if player_index == proposal.counterparty_index {
+            self.bank_proposals[position].cash_from_requester = counter_amount;
+        } else {
+            self.bank_proposals[position].cash_from_counterparty = counter_amount;
+        }
+        self.bank_proposals[position].awaiting_player_index = other;
+        self.bank_proposals[position].note = format!(
+            "AI-motbud från {}: {} kr.",
+            self.players[player_index].name, counter_amount
+        );
+        let summary = self.bank_proposal_summary(&self.bank_proposals[position]);
+        self.bank_message = format!(
+            "{} svarar med motbud: {summary}",
+            self.players[player_index].name
+        );
+        self.push_event(format!("AI-motbud via banken: {summary}"));
+        self.push_bank_message("Banken", &self.bank_message.clone(), true);
+        true
+    }
+
+    fn ai_can_counter_proposal(&self, proposal: &BankProposal, player_index: usize) -> bool {
+        if proposal.awaiting_player_index != player_index || proposal.note.contains("AI-motbud") {
+            return false;
+        }
+        if proposal.spaces_from_requester.is_empty() && proposal.spaces_from_counterparty.is_empty()
+        {
+            return false;
+        }
+        self.ai_counter_cash_amount(proposal, player_index)
+            .is_some()
+    }
+
+    fn ai_counter_cash_amount(&self, proposal: &BankProposal, player_index: usize) -> Option<i32> {
+        let rules = load_bank_rules();
+        if player_index == proposal.counterparty_index {
+            let given_value = proposal
+                .spaces_from_counterparty
+                .iter()
+                .map(|index| self.space_trade_value_for_player(*index, player_index))
+                .sum::<i32>();
+            let received_value = proposal
+                .spaces_from_requester
+                .iter()
+                .map(|index| self.space_trade_value_for_player(*index, player_index))
+                .sum::<i32>();
+            let minimum = (given_value - received_value + 300).max(100);
+            let current = proposal.cash_from_requester;
+            let counter = minimum
+                .max((current * 115) / 100)
+                .min(rules.trade_cash_limit);
+            let requester_max = self.players[proposal.requester_index]
+                .cash
+                .saturating_sub(1000)
+                .max(0);
+            if counter > current && counter <= requester_max {
+                return Some(counter);
+            }
+        } else if player_index == proposal.requester_index && proposal.cash_from_counterparty > 0 {
+            let current = proposal.cash_from_counterparty;
+            let counter = ((current * 85) / 100).max(100);
+            if counter < current && counter <= self.players[proposal.counterparty_index].cash {
+                return Some(counter);
+            }
+        }
+        None
+    }
+
     fn ai_trade_candidate(&self, player_index: usize) -> Option<BankProposal> {
         if self
             .bank_proposals
@@ -3166,20 +3288,67 @@ impl GameState {
                 if amount <= 0 || self.players[player_index].cash < amount + 1000 {
                     continue;
                 }
+                let swap_space =
+                    self.ai_trade_asset_for_counterparty(player_index, owner, *space_index);
+                let requester_value = swap_space
+                    .map(|index| self.space_trade_value_for_player(index, owner))
+                    .unwrap_or(0);
+                let wanted_value = self.space_trade_value_for_player(*space_index, player_index);
+                let cash_with_swap = (wanted_value - requester_value + 300)
+                    .max(0)
+                    .min(rules.trade_cash_limit);
+                let (cash_from_requester, spaces_from_requester, kind, note) = if let Some(
+                    swap_space,
+                ) = swap_space
+                {
+                    if self.players[player_index].cash >= cash_with_swap + 1000
+                        && requester_value > 0
+                    {
+                        (
+                            cash_with_swap,
+                            vec![swap_space],
+                            "ai_property_trade",
+                            format!(
+                                "AI föreslår byte för att samla {}-gruppen och ger en ruta tillbaka.",
+                                color_group_label(color)
+                            ),
+                        )
+                    } else {
+                        (
+                            amount,
+                            Vec::new(),
+                            "ai_cash_offer",
+                            format!("AI vill samla {}-gruppen.", color_group_label(color)),
+                        )
+                    }
+                } else {
+                    (
+                        amount,
+                        Vec::new(),
+                        "ai_cash_offer",
+                        format!("AI vill samla {}-gruppen.", color_group_label(color)),
+                    )
+                };
+                if cash_from_requester > 0
+                    && self.players[player_index].cash < cash_from_requester + 1000
+                {
+                    continue;
+                }
                 let score = (owned as i32 * 10_000)
                     + if missing == 1 { 5_000 } else { 0 }
-                    + self.rent_for_space(*space_index);
+                    + self.rent_for_space(*space_index)
+                    + requester_value;
                 let proposal = BankProposal {
                     id: 0,
-                    kind: "ai_cash_offer".to_string(),
+                    kind: kind.to_string(),
                     requester_index: player_index,
                     counterparty_index: owner,
                     awaiting_player_index: owner,
-                    cash_from_requester: amount,
+                    cash_from_requester,
                     cash_from_counterparty: 0,
-                    spaces_from_requester: Vec::new(),
+                    spaces_from_requester,
                     spaces_from_counterparty: vec![*space_index],
-                    note: format!("AI vill samla {}-gruppen.", color_group_label(color)),
+                    note,
                 };
                 if best
                     .as_ref()
@@ -3191,6 +3360,29 @@ impl GameState {
             }
         }
         best.map(|(_, proposal)| proposal)
+    }
+
+    fn ai_trade_asset_for_counterparty(
+        &self,
+        player_index: usize,
+        counterparty_index: usize,
+        wanted_space_index: usize,
+    ) -> Option<usize> {
+        let wanted_color = self
+            .spaces
+            .get(wanted_space_index)
+            .and_then(|space| space.color.as_deref());
+        self.spaces
+            .iter()
+            .filter(|space| matches!(space.kind.as_str(), "property" | "station" | "utility"))
+            .filter(|space| self.owners[space.index] == Some(player_index))
+            .filter(|space| space.color.as_deref() != wanted_color)
+            .filter(|space| !self.has_buildings_in_group(space.index))
+            .max_by_key(|space| {
+                self.space_trade_value_for_player(space.index, counterparty_index)
+                    - self.space_trade_value_for_player(space.index, player_index)
+            })
+            .map(|space| space.index)
     }
 
     fn pending_bank_proposal_for(&self, player_index: usize) -> Option<u64> {
@@ -3216,13 +3408,13 @@ impl GameState {
         if proposal.requester_index == player_index {
             value -= proposal.cash_from_requester;
             value += proposal.cash_from_counterparty;
-            value -= self.spaces_value(&proposal.spaces_from_requester);
-            value += self.spaces_value(&proposal.spaces_from_counterparty);
+            value -= self.spaces_trade_value(&proposal.spaces_from_requester, player_index);
+            value += self.spaces_trade_value(&proposal.spaces_from_counterparty, player_index);
         } else if proposal.counterparty_index == player_index {
             value += proposal.cash_from_requester;
             value -= proposal.cash_from_counterparty;
-            value += self.spaces_value(&proposal.spaces_from_requester);
-            value -= self.spaces_value(&proposal.spaces_from_counterparty);
+            value += self.spaces_trade_value(&proposal.spaces_from_requester, player_index);
+            value -= self.spaces_trade_value(&proposal.spaces_from_counterparty, player_index);
         }
         value
     }
@@ -3247,18 +3439,43 @@ impl GameState {
         })
     }
 
-    fn spaces_value(&self, indexes: &[usize]) -> i32 {
+    fn spaces_trade_value(&self, indexes: &[usize], player_index: usize) -> i32 {
         indexes
             .iter()
-            .filter_map(|index| self.spaces.get(*index))
-            .map(|space| {
-                let base = space
-                    .price
-                    .unwrap_or_else(|| self.rent_for_space(space.index) * 10);
-                let buildings = self.buildings[space.index] as i32 * space.build_cost.unwrap_or(0);
-                base + buildings
-            })
+            .map(|index| self.space_trade_value_for_player(*index, player_index))
             .sum()
+    }
+
+    fn space_trade_value_for_player(&self, space_index: usize, player_index: usize) -> i32 {
+        let Some(space) = self.spaces.get(space_index) else {
+            return 0;
+        };
+        let base = space
+            .price
+            .unwrap_or_else(|| self.rent_for_space(space.index) * 10);
+        let buildings = self.buildings[space.index] as i32 * space.build_cost.unwrap_or(0);
+        let mut value = base + buildings;
+        if let Some(color) = space.color.as_deref() {
+            let group = self.color_group_indices(color);
+            let owned = group
+                .iter()
+                .filter(|index| self.owners[**index] == Some(player_index))
+                .count();
+            if owned + 1 == group.len() {
+                value += 1400;
+            } else if owned > 0 {
+                value += owned as i32 * 350;
+            }
+            if self.owners[space_index] == Some(player_index)
+                && !group.is_empty()
+                && group
+                    .iter()
+                    .all(|index| self.owners[*index] == Some(player_index))
+            {
+                value += 1800;
+            }
+        }
+        value
     }
 
     fn has_ai_liquidation_option(&self, player_index: usize) -> bool {
@@ -4566,6 +4783,7 @@ impl AiDecision {
             AiDecision::Bankrupt => "bankrupt",
             AiDecision::Build => "build",
             AiDecision::Trade => "trade",
+            AiDecision::CounterProposal => "counter_proposal",
             AiDecision::AcceptProposal => "accept_proposal",
             AiDecision::DeclineProposal => "decline_proposal",
             AiDecision::Wait => "wait",
@@ -4582,6 +4800,7 @@ impl AiDecision {
             AiDecision::Bankrupt => "konkurs",
             AiDecision::Build => "bygga",
             AiDecision::Trade => "handelsbud",
+            AiDecision::CounterProposal => "motbud",
             AiDecision::AcceptProposal => "acceptera förslag",
             AiDecision::DeclineProposal => "avböja förslag",
             AiDecision::Wait => "vänta",
@@ -4602,6 +4821,9 @@ impl AiDecision {
                 Some(AiDecision::Build)
             }
             "trade" | "byt" | "byta" | "byte" | "deal" | "bud" | "buda" => Some(AiDecision::Trade),
+            "counterproposal" | "counteroffer" | "motbud" | "motbuda" => {
+                Some(AiDecision::CounterProposal)
+            }
             "acceptproposal" | "accept" | "acceptera" | "godkann" | "godkanna" => {
                 Some(AiDecision::AcceptProposal)
             }
@@ -4637,6 +4859,9 @@ impl AiDecision {
             ("declineproposal", AiDecision::DeclineProposal),
             ("reject", AiDecision::DeclineProposal),
             ("avboj", AiDecision::DeclineProposal),
+            ("counterproposal", AiDecision::CounterProposal),
+            ("counteroffer", AiDecision::CounterProposal),
+            ("motbud", AiDecision::CounterProposal),
             ("build", AiDecision::Build),
             ("bygg", AiDecision::Build),
             ("trade", AiDecision::Trade),
@@ -5741,6 +5966,81 @@ Offensiv och bytesglad.
         assert_eq!(game.bank_proposals[0].requester_index, 0);
         assert_eq!(game.bank_proposals[0].counterparty_index, 1);
         assert_eq!(game.bank_proposals[0].spaces_from_counterparty, vec![3]);
+    }
+
+    #[test]
+    fn ai_player_can_answer_proposal_outside_own_turn() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+        game.players[1].name = "Rut".to_string();
+        game.players[1].controller = PlayerController::Ai;
+        game.current_player_index = 0;
+        game.owners[3] = Some(1);
+        game.bank_proposals.push(BankProposal {
+            id: 7,
+            kind: "cash_offer".to_string(),
+            requester_index: 0,
+            counterparty_index: 1,
+            awaiting_player_index: 1,
+            cash_from_requester: 5000,
+            cash_from_counterparty: 0,
+            spaces_from_requester: Vec::new(),
+            spaces_from_counterparty: vec![3],
+            note: "Testbud.".to_string(),
+        });
+
+        assert!(game.queue_ai_action_if_needed());
+        game.apply_ai_turn_decision("Rut", AiDecision::AcceptProposal, "Bra pris.");
+
+        assert_eq!(game.owners[3], Some(0));
+        assert!(game.bank_proposals.is_empty());
+        assert_eq!(game.current_player_index, 0);
+    }
+
+    #[test]
+    fn ai_trade_can_offer_property_back_to_counterparty() {
+        let mut game = playable_game();
+        game.players[0].name = "Rut".to_string();
+        game.players[1].name = "Bosse".to_string();
+        game.players[0].controller = PlayerController::Ai;
+        game.owners[1] = Some(0);
+        game.owners[3] = Some(1);
+        game.owners[6] = Some(1);
+        game.owners[8] = Some(0);
+
+        assert!(game.ai_propose_trade_once(0));
+
+        assert_eq!(game.bank_proposals.len(), 1);
+        assert_eq!(game.bank_proposals[0].spaces_from_counterparty, vec![3]);
+        assert_eq!(game.bank_proposals[0].spaces_from_requester, vec![8]);
+    }
+
+    #[test]
+    fn ai_counter_proposal_raises_low_cash_offer_once() {
+        let mut game = playable_game();
+        game.players[0].name = "Maja".to_string();
+        game.players[1].name = "Rut".to_string();
+        game.players[1].controller = PlayerController::Ai;
+        game.owners[3] = Some(1);
+        game.bank_proposals.push(BankProposal {
+            id: 9,
+            kind: "cash_offer".to_string(),
+            requester_index: 0,
+            counterparty_index: 1,
+            awaiting_player_index: 1,
+            cash_from_requester: 100,
+            cash_from_counterparty: 0,
+            spaces_from_requester: Vec::new(),
+            spaces_from_counterparty: vec![3],
+            note: "Lågt bud.".to_string(),
+        });
+
+        assert!(game.ai_counter_proposal_once(1));
+
+        assert_eq!(game.bank_proposals[0].awaiting_player_index, 0);
+        assert!(game.bank_proposals[0].cash_from_requester > 100);
+        assert!(game.bank_proposals[0].note.contains("AI-motbud"));
+        assert!(!game.ai_counter_proposal_once(0));
     }
 
     #[test]
