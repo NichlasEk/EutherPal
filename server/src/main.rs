@@ -4654,10 +4654,10 @@ impl AiDecision {
     }
 
     fn constrained_for_fallback(self, fallback: AiDecision) -> Self {
-        if self == AiDecision::Wait {
-            fallback
-        } else {
-            self
+        match (self, fallback) {
+            (AiDecision::Wait, fallback) => fallback,
+            (AiDecision::Roll, AiDecision::Trade) => AiDecision::Trade,
+            _ => self,
         }
     }
 }
@@ -5741,6 +5741,25 @@ Offensiv och bytesglad.
         assert_eq!(game.bank_proposals[0].requester_index, 0);
         assert_eq!(game.bank_proposals[0].counterparty_index, 1);
         assert_eq!(game.bank_proposals[0].spaces_from_counterparty, vec![3]);
+    }
+
+    #[test]
+    fn ai_roll_is_constrained_to_trade_when_trade_fallback_exists() {
+        let mut game = playable_game();
+        game.players[0].name = "Rut".to_string();
+        game.players[1].name = "Bosse".to_string();
+        game.players[0].controller = PlayerController::Ai;
+        game.owners[1] = Some(0);
+        game.owners[3] = Some(1);
+
+        let fallback = game.fallback_ai_decision(0);
+        assert!(fallback == AiDecision::Trade);
+
+        let decision = AiDecision::Roll.constrained_for_fallback(fallback);
+        game.apply_ai_turn_decision("Rut", decision, "Jag vill hellre slå tärning.");
+
+        assert_eq!(game.bank_proposals.len(), 1);
+        assert!(game.ai_turn_thought.contains("handelsbud"));
     }
 
     #[test]
